@@ -9,7 +9,7 @@ who has not answered three, an AE and a CSR revising the same COI all afternoon.
     check_revision(run, target)  -> None | {"code", "why"}     before an AE REVISE is accepted
 
 Codes, in the order checked (cheapest and most absolute first):
-  KILL_SWITCH      data/runtime/STOP exists: every ticket halts
+  KILL_SWITCH      <home>/runtime/STOP exists: every ticket halts
   WALL_CLOCK       agent time since receipt or the last human hand-back > WALL_CLOCK_HOURS[type]
   MAX_HOPS         more than MAX_HOPS steps
   STEP_REVISIT     one step (agent:task) about to run more than MAX_VISITS_PER_STEP times
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import schemas, thresholds
+from . import paths, schemas, thresholds
 
 ROOT = Path(__file__).resolve().parents[2]
 EXEMPT_FROM_REVISIT = ("CSR8", "AE")
@@ -35,7 +35,7 @@ def _agent(step: str) -> str:
 
 
 def check(run: dict, step: str, now, kill_switch: Path = None, ask_is_new: bool = True) -> dict:
-    ks = kill_switch or (ROOT / thresholds.KILL_SWITCH)
+    ks = kill_switch or (paths.runtime() / thresholds.KILL_SWITCH)
     if ks.exists():
         return {"code": "KILL_SWITCH", "why": f"{ks} exists: all tickets halted by the agency"}
     # agent time: from receipt, or from the last time a human (AE revise, client reply) handed it back

@@ -16,13 +16,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import (acord, audit, claimsdesk, decpages, exclusions, grounding, intake, lossruns, market, packet,
+from . import (paths, acord, audit, claimsdesk, decpages, exclusions, grounding, intake, lossruns, market, packet,
                pii, policy, policycheck, renewals, routing, schemas, service, store, thresholds)
 from .desk import Ctx, result
 from .limiter import check as limiter_check, check_revision
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNTIME = ROOT / "data" / "runtime"
 
 WORKERS = {
     "CSR1:intake": intake.run,
@@ -74,7 +73,7 @@ def _record(run: dict, as_of: str, config: dict) -> dict:
 
 
 def _log(config: dict, run: dict) -> audit.AuditLog:
-    return audit.AuditLog(Path(config.get("audit_dir") or RUNTIME / "audit") / f"{run['ticket_id']}.jsonl")
+    return audit.AuditLog(Path(config.get("audit_dir") or paths.runtime() / "audit") / f"{run['ticket_id']}.jsonl")
 
 
 def _append(run: dict, log, entry: dict) -> None:
@@ -90,8 +89,8 @@ def draft_digest(d: dict) -> str:
 
 
 def agency_live(config: dict = None) -> bool:
-    """`live` is the agency's switch, set in data/runtime/desk.json ({"live": true}); never a CLI flag."""
-    p = Path((config or {}).get("desk_config") or RUNTIME / "desk.json")
+    """`live` is the agency's switch, set in <home>/runtime/desk.json ({"live": true}); never a CLI flag."""
+    p = Path((config or {}).get("desk_config") or paths.runtime() / "desk.json")
     try:
         return json.loads(p.read_text(encoding="utf-8")).get("live") is True
     except (FileNotFoundError, json.JSONDecodeError):
@@ -109,7 +108,10 @@ def _halt(run: dict, halt: dict, as_of: str, config: dict, log) -> dict:
 
 
 def advance(run: dict, *, as_of: str, now, config: dict = None, fetch=None) -> dict:
-    config = config or {}
+    config = dict(config or {})
+    if "profile" not in config:                     # the agency's identity: producer block, signatures, states written
+        from . import agency
+        config["profile"] = agency.load_profile()
     log = _log(config, run)
     budget = policy.Budget(thresholds.TICKET_BUDGET, run["budget_used"])
     skipped = set(run["skipped"])
@@ -257,7 +259,7 @@ def release(run: dict, index: int, *, live: bool = False, harness: bool = False,
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 def ticket_path(ticket_id: str, config: dict = None) -> Path:
-    return Path((config or {}).get("tickets_dir") or RUNTIME / "tickets") / f"{ticket_id}.json"
+    return Path((config or {}).get("tickets_dir") or paths.runtime() / "tickets") / f"{ticket_id}.json"
 
 
 def save(run: dict, config: dict = None) -> Path:

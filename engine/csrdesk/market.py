@@ -20,16 +20,14 @@ import csv
 import json
 from pathlib import Path
 
-from . import markets, renewals, schemas, scoring, staterules, thresholds
+from . import markets, paths, renewals, schemas, scoring, staterules, thresholds
 from .desk import Ctx, message, result, ticket_lines
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def load_appetite(path) -> list:
-    p = Path(path)
-    if not p.is_absolute():
-        p = ROOT / p
+def load_appetite(path=None) -> list:
+    p = paths.resolve(path, paths.appetite())
     if not p.exists():
         return None
     with p.open(newline="", encoding="utf-8") as f:
@@ -96,12 +94,12 @@ def run(ctx: Ctx) -> dict:
     lead = f"Remarket ({'; '.join(why)}). " if why else ""
     intake = ctx.out("CSR1:intake")
     lines = intake["ready_lines"] if intake else ticket_lines(ctx.ticket)
-    rows = load_appetite(ctx.config.get("appetite", "data/appetite.csv"))
+    rows = load_appetite(ctx.config.get("appetite"))
     if rows is None:
         return result("CSR4", "market", "needs_data",
                       lead + "Market: no agency appetite file loaded; CSR 4 will not recommend carriers from memory.",
                       findings={"status": "needs_key", "value": None, "lines": lines, "remarket_reasons": why,
-                                "fix": "load the agency's appetite guide into data/appetite.csv (see market.py docstring)"})
+                                "fix": "bin/csr setup research -> propose -> confirm builds <home>/appetite.csv (docs/DEPLOYMENT.md)"})
     if not a.get("naics"):
         return result("CSR4", "market", "needs_data", lead + "Market: NAICS not set; appetite cannot be filtered.",
                       findings={"status": "needs_data", "value": None, "lines": lines, "remarket_reasons": why})
@@ -159,8 +157,8 @@ def validate_appetite(path, as_of: str) -> dict:
     is `ok` only with no problems. Stale rows are warnings: filter_markets already drops them."""
     rows = load_appetite(path)
     if rows is None:
-        return {"ok": False, "status": "needs_key", "rows": 0, "errors": [f"{path} not found"], "warnings": []}
-    p = Path(path) if Path(path).is_absolute() else ROOT / path
+        return {"ok": False, "status": "needs_key", "rows": 0, "errors": [f"{paths.resolve(path, paths.appetite())} not found"], "warnings": []}
+    p = paths.resolve(path, paths.appetite())
     with p.open(newline="", encoding="utf-8") as f:
         header = next(csv.reader(f), [])
     errors, warnings = [], []

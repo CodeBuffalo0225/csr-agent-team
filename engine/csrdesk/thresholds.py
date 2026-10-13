@@ -53,7 +53,7 @@ TICKET_BUDGET = {"calls": 40, "writes": 12}   # outside calls (public data, conn
 WALL_CLOCK_HOURS = {                     # ticket age at which it halts to a human, by type
     "QUOTE": 72, "RENEWAL": 24 * 30, "COI": 4, "SERVICE": 24, "CLAIM": 2, "POLICY_CHECK": 72,
 }
-KILL_SWITCH = "data/runtime/STOP"        # if this file exists, every ticket halts before its next step
+KILL_SWITCH = "STOP"                     # <home>/runtime/STOP: if it exists, every ticket halts before its next step
 
 # ── Commercial auto size class (ISO, by GVW in lb) ───────────────────────────
 SIZE_CLASSES = (

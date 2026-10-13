@@ -66,6 +66,9 @@ def run(ctx: Ctx) -> dict:
             rule_txt += f"; {left} days left and no non-renewal notice on file"
     else:
         rule_txt = f"{state} notice rules: {rule['why']}"
+    written = ((ctx.config.get("profile") or {}).get("states_written")) or []
+    if written and state and state not in written:
+        rule_txt += f"; {state} is not in the agency's states written ({', '.join(written)})"
     return result("CSR6", "renewal", "escalate" if urgent else "done",
                   f"Renewal: {p['line']} {p['policy_number']} expires in {left} days; {len(due)} rung(s) due. {rule_txt}.",
                   findings={"policy_number": p["policy_number"], "line": p["line"], "days_to_expiration": left,

@@ -27,19 +27,19 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from . import schemas, scoring
+from . import paths, schemas, scoring
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT = ROOT / "data" / "state_rules.csv"
-SURPLUS_DEFAULT = ROOT / "data" / "surplus_lines_rules.csv"
+NOTICE_FILE = "state_rules.csv"
+SURPLUS_FILE = "surplus_lines_rules.csv"
 RULES_MAX_AGE_DAYS = 365          # a rule verified longer ago than this is re-verified before it is shown as current
 DAY_FIELDS = ("nonrenewal_notice_days", "cancel_nonpay_notice_days", "cancel_other_notice_days")
 
 
-def load(path=None, default=DEFAULT) -> list:
-    p = Path(path) if path else default
+def load(path=None, name: str = NOTICE_FILE) -> list:
+    p = Path(path).expanduser() if path else paths.rules_file(name)
     if not p.is_absolute():
-        p = ROOT / p
+        p = paths.home() / p
     if not p.exists():
         return []
     with p.open(newline="", encoding="utf-8") as f:
@@ -101,8 +101,33 @@ def _status(row: dict, as_of: str, value: dict) -> dict:
     return out
 
 
+def confirm(state: str, by: str) -> dict:
+    """Compliance confirms one state's rows: they are written, with confirmed_by, into the agency's own copy at
+    <home>/state_rules.csv and <home>/surplus_lines_rules.csv (the shipped files are never edited). A human act:
+    the plugin hook refuses this command from an agent; compliance runs it in their own terminal."""
+    if not (by or "").strip():
+        raise ValueError("rules confirm needs --by <the compliance owner confirming>")
+    out = {}
+    for name in (NOTICE_FILE, SURPLUS_FILE):
+        rows = load(None, name)
+        mine = [r for r in rows if r["state"].strip() == state]
+        for r in mine:
+            r["confirmed_by"] = by.strip()
+        if rows:
+            dest = paths.home() / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with dest.open("w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, list(rows[0].keys()))
+                w.writeheader()
+                w.writerows(rows)
+        out[name] = len(mine)
+    if not any(out.values()):
+        raise ValueError(f"no rows for {state}: add them (with source_url and verified) before confirming")
+    return {"state": state, "by": by.strip(), "confirmed_rows": out}
+
+
 def surplus_rule(state: str, as_of: str, rows: list = None) -> dict:
-    rows = load(None, SURPLUS_DEFAULT) if rows is None else rows
+    rows = load(None, SURPLUS_FILE) if rows is None else rows
     for r in rows:
         if r["state"].strip() != state:
             continue

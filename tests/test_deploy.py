@@ -100,7 +100,11 @@ class ResearchedRules(unittest.TestCase):
         self.assertTrue(nj["evidence"]["url"].startswith("https://"))
         self.assertEqual(staterules.rule_for("NJ", "WC", AS_OF)["status"], "needs_data")   # WC rules differ; not loaded
         self.assertEqual(staterules.surplus_rule("NY", AS_OF)["value"]["declinations_required"], 3)
-        self.assertEqual(staterules.surplus_rule("PA", AS_OF)["status"], "needs_data")
+        self.assertEqual(staterules.surplus_rule("PA", AS_OF)["value"]["declinations_required"], 3)
+        self.assertEqual(staterules.surplus_rule("CT", AS_OF)["status"], "needs_data")   # CT Public Act 26-69 change unconfirmed: not loaded
+        self.assertEqual(staterules.rule_for("PA", "GL", AS_OF)["status"], "needs_data")  # statute text not verifiable: not loaded
+        ct = staterules.rule_for("CT", "PROFESSIONAL", AS_OF)["value"]
+        self.assertEqual((ct["nonrenewal_notice_days"], ct["cancel_nonpay_notice_days"]), (90, 10))
 
     def test_unconfirmed_rule_shows_as_confirm_item_and_window_fact(self):
         run = orchestrator.advance(orchestrator.open_ticket(ticket("renewal.json")), as_of="2026-10-25", now=NOW,

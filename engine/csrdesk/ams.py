@@ -27,10 +27,10 @@ import os
 import urllib.request
 from pathlib import Path
 
-from . import policy
+from . import paths, policy
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG = ROOT / "data" / "agency" / "ams.json"
+
 SYSTEMS = {
     "applied_epic": {"label": "Applied Epic", "primary": True, "objects": ("client", "note"),
                      "note_name": "activity", "client_tool": "applied_epic_update_client", "note_tool": "applied_epic_create_activity",
@@ -47,7 +47,7 @@ SYSTEMS = {
 
 
 def load_config(path=None) -> dict:
-    p = Path(path) if path else CONFIG
+    p = Path(path) if path else paths.agency_dir() / "ams.json"
     if not p.exists():
         return None
     return json.loads(p.read_text(encoding="utf-8"))
@@ -58,7 +58,7 @@ def connector_status(call_log: list = None, config_path=None) -> dict:
     cfg = load_config(config_path)
     missing = []
     if cfg is None:
-        missing.append("data/agency/ams.json (system, base_url, token_env, paths)")
+        missing.append("<home>/agency/ams.json (system, base_url, token_env, paths)")
     else:
         if cfg.get("system") not in SYSTEMS:
             missing.append(f"system must be one of {sorted(SYSTEMS)}")

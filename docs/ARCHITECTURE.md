@@ -1,6 +1,6 @@
 # Agency CSR Desk: Architecture
 
-Ten CSR agents (plus CSR 11, policy checking) and an AE feedback loop for a commercial-lines agency. The goal is that the AE opens one
+A Claude Code plugin any agency installs (`docs/DEPLOYMENT.md`): ten CSR agents (plus CSR 11, policy checking) and an AE feedback loop for a commercial-lines agency. The goal is that the AE opens one
 packet per ticket, sees what is on fire first, and approves, sends back or rejects in a minute. CSRs
 can use the same desk: every step a CSR does by hand here is a step they can check instead of type.
 
@@ -226,11 +226,14 @@ honest state until it's loaded.
 |---|---|---|---|
 | Markets: appointed carriers + wholesalers/MGAs | `data/agency/markets.csv` (template alongside) | `bin/csr setup validate` | appointment and admitted status unchecked, noted in every market step |
 | Carrier appetite | researched per market (`setup research` → `propose`), confirmed by a person (`setup confirm`) into `data/appetite.csv` | `bin/csr appetite` | CSR 4 is `needs_key`: no carriers from memory |
-| State notice periods + surplus-lines diligent effort | `data/state_rules.csv`, `data/surplus_lines_rules.csv`: **NJ and NY researched and cited 2026-10-13**, awaiting compliance's `confirmed_by` | `bin/csr rules` | other states: "Data gap"; NJ/NY: "Confirm: compliance has not confirmed it" |
+| Agency profile (producer, NPN, states/lines written, AMS, compliance owner) | `<home>/agency/agency.json` via `bin/csr init` | `bin/csr readiness` | no producer block on certificates, no email signature, readiness NOT READY |
+| State notice periods + surplus-lines diligent effort | shipped `data/state_rules.csv`, `data/surplus_lines_rules.csv`: **NJ, NY, CT notice and NJ, NY, PA surplus researched and cited 2026-10-13**; compliance confirms into the agency home with `bin/csr rules confirm` | `bin/csr rules`, `readiness` | other states: "Data gap"; shipped rows: "Confirm: compliance has not confirmed it" |
 | AMS: Applied Epic (primary), HawkSoft, EZLynx | `data/agency/ams.json` + token env var, after the vendor grants API access | `bin/csr ams status`, `ams preview` | `needs_key`; `bin/csr ams export <dir>` writes masked import files |
 | Closed tickets for evaluation | `data/runtime/replay/` (gitignored: real tickets hold PII), format in `replay.py` | `bin/csr replay data/runtime/replay` | only the six SAMPLE replay cases exist |
 
-Agency-specific files are gitignored. A state-rule value nobody verified would be a legal claim the engine made
+Every agency file lives in that agency's home (`$CSR_DESK_HOME`, `paths.py`); `bin/csr readiness` is the single
+checklist that says READY or names each remaining step with its fix. The plugin hook (`guard.py`) asks a person
+before any irreversible connector call and refuses agent edits to the human-only files and commands. A state-rule value nobody verified would be a legal claim the engine made
 up, so rows without a source URL and verified date are rejected, rows older than a year are flagged stale, and
 researched rows stay "unconfirmed" until compliance signs them. Step-by-step with sources: `docs/DEPLOYMENT.md`.
 

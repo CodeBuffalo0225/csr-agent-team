@@ -4,7 +4,7 @@ stop-limiter said no · 2 bad input.
     bin/csr run <ticket.json> [--as-of D] [--now TS] [--json]     open a ticket and advance it to the AE
     bin/csr decide <ticket_id> <decision.json> [--update t.json]  AE feedback: APPROVE | REVISE | REJECT | ESCALATE
     bin/csr refresh <ticket_id> <ticket.json>                     the client answered; re-run from intake
-    bin/csr release <ticket_id> <draft#>                          may a human release this draft? (spine S8; live = data/runtime/desk.json)
+    bin/csr release <ticket_id> <draft#>                          may a human release this draft? (spine S8; live = <home>/runtime/desk.json)
     bin/csr packet <ticket_id> [--json]                           the AE packet
     bin/csr renewals <accounts.json> [--as-of D]                  CSR 6 book sweep
     bin/csr vin <VIN> [<VIN> ...]                                 check digit + NHTSA decode
@@ -14,8 +14,11 @@ stop-limiter said no · 2 bad input.
     bin/csr audit <ticket_id>                                     verify the hash chain
     bin/csr conformance                                           spine-spec vectors against production gates
     bin/csr demo                                                  every example ticket end to end (isolated runtime)
-    bin/csr appetite [file]                                       validate the agency appetite file (default data/appetite.csv)
+    bin/csr appetite [file]                                       validate the agency appetite file (default <home>/appetite.csv)
     bin/csr rules [file]                                          validate notice + surplus lines rules; count unconfirmed rows
+    bin/csr init [dir]                                            create an agency home (never overwrites)
+    bin/csr readiness [--json]                                    the deployment checklist: READY or what is left
+    bin/csr rules confirm <STATE> --by <name>                     compliance confirms a state's rules (human-only)
     bin/csr setup validate|research                               deployment: check markets.csv; research tasks per appointed market
     bin/csr setup propose <rows.csv> | confirm <market> --by <n>  proposed appetite rows; a person confirms one market's rows
     bin/csr ams status|preview <id> [--system s]|push <id>|export <dir>   Applied Epic (primary), HawkSoft, EZLynx
@@ -29,7 +32,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import ams, audit, conformance, grounding, market, markets, orchestrator, packet, policy, publicdata, renewals, replay, schemas, staterules, store
+from . import agency, ams, audit, paths, conformance, grounding, market, markets, orchestrator, packet, policy, publicdata, renewals, replay, schemas, staterules, store
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -131,7 +134,7 @@ def cmd_classify(a):
 
 def cmd_audit(a):
     head = orchestrator.load(a.ticket_id).get("audit_head") if orchestrator.ticket_path(a.ticket_id).exists() else None
-    r = audit.AuditLog(orchestrator.RUNTIME / "audit" / f"{a.ticket_id}.jsonl").verify(expected=head)
+    r = audit.AuditLog(paths.runtime() / "audit" / f"{a.ticket_id}.jsonl").verify(expected=head)
     print(json.dumps(r))
     return 0 if r["ok"] else 1
 
@@ -147,16 +150,40 @@ def cmd_appetite(a):
 
 
 def cmd_rules(a):
+    if a.file == "confirm":
+        if not a.state:
+            raise ValueError("rules confirm needs a two-letter state")
+        print(json.dumps(staterules.confirm(a.state, a.by), indent=2))
+        return 0
     rows = staterules.load(a.file)
     errors = staterules.validate(rows, _today(None))
     status = "needs_data" if not rows else ("ok" if not errors else "invalid")
-    surplus = staterules.load(None, staterules.SURPLUS_DEFAULT)
+    surplus = staterules.load(None, staterules.SURPLUS_FILE) if not a.file else []
     unconfirmed = sorted({f"{r['state']}" for r in rows + surplus if not (r.get("confirmed_by") or "").strip()})
     print(json.dumps({"status": status, "rows": len(rows), "surplus_rows": len(surplus), "errors": errors,
                       "unconfirmed_states": unconfirmed,
                       "confirm": "compliance sets confirmed_by on each row after checking it against its source_url" if unconfirmed else None},
                      indent=2))
     return 0 if status == "ok" else 1
+
+
+def cmd_init(a):
+    print(json.dumps(agency.init(a.dir), indent=2))
+    return 0
+
+
+def cmd_readiness(a):
+    r = agency.readiness(_today(None))
+    if a.json:
+        print(json.dumps(r, indent=2))
+    else:
+        print(f"{r['verdict']} · home {r['home']} · {r['todo']} step(s) left\n")
+        for i in r["items"]:
+            mark = {"done": "[x]", "todo": "[ ]", "info": "[-]"}[i["status"]]
+            print(f"{mark} {i['step']}: {i['detail']}")
+            if i["fix"]:
+                print(f"      -> {i['fix']}")
+    return 0 if r["verdict"] == "READY" else 1
 
 
 def cmd_setup(a):
@@ -234,7 +261,7 @@ def main(argv=None) -> int:
         sp.add_argument("--now", help="ISO timestamp for the wall-clock limiter (default: now)")
         sp.add_argument("--json", action="store_true")
         if appetite:
-            sp.add_argument("--appetite", help="agency appetite CSV (default data/appetite.csv)")
+            sp.add_argument("--appetite", help="agency appetite CSV (default <home>/appetite.csv)")
             sp.add_argument("--judgments", help="CSR 4 market judgments JSON (schema-gated)")
 
     s = sub.add_parser("run"); s.add_argument("ticket"); common(s); s.set_defaults(fn=cmd_run)
@@ -250,8 +277,11 @@ def main(argv=None) -> int:
     s = sub.add_parser("audit"); s.add_argument("ticket_id"); s.set_defaults(fn=cmd_audit)
     s = sub.add_parser("conformance"); s.set_defaults(fn=cmd_conformance)
     s = sub.add_parser("demo"); s.add_argument("--out"); s.set_defaults(fn=cmd_demo)
-    s = sub.add_parser("appetite"); s.add_argument("file", nargs="?", default="data/appetite.csv"); s.set_defaults(fn=cmd_appetite)
-    s = sub.add_parser("rules"); s.add_argument("file", nargs="?", default=None); s.set_defaults(fn=cmd_rules)
+    s = sub.add_parser("appetite"); s.add_argument("file", nargs="?", default=None); s.set_defaults(fn=cmd_appetite)
+    s = sub.add_parser("rules"); s.add_argument("file", nargs="?", default=None, help="a rules CSV to validate, or 'confirm'")
+    s.add_argument("state", nargs="?"); s.add_argument("--by"); s.set_defaults(fn=cmd_rules)
+    s = sub.add_parser("init"); s.add_argument("dir", nargs="?"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("readiness"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_readiness)
     s = sub.add_parser("ams"); s.add_argument("action", choices=["status", "preview", "push", "export"]); s.add_argument("out", nargs="?")
     s.add_argument("--system", default="applied_epic", choices=sorted(ams.SYSTEMS)); s.set_defaults(fn=cmd_ams)
     s = sub.add_parser("setup"); s.add_argument("action", choices=["validate", "research", "propose", "confirm"]); s.add_argument("arg", nargs="?")

@@ -1,0 +1,17 @@
+{
+  "description": "csr-desk safety: ask a human before any irreversible connector call (send, bind, issue, submit, file, pay); ask before AMS writes while the desk is not live; refuse agent edits to the human-only files (live switch, confirmed appetite, confirmed rules, audit, store, pepper) and the human-only commands (setup confirm, rules confirm). Fails closed.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*|Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/engine/hook.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

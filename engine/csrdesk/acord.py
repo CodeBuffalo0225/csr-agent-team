@@ -138,7 +138,9 @@ def coi(ctx: Ctx) -> dict:
     if req.get("primary_noncontributory") and any(ck.get("requirement") == "primary_noncontributory" and ck["status"] == "listed"
                                                    for b in baseline.values() for ck in b.get("endorsement_checks", [])):
         desc += " Coverage is primary and noncontributory where required by written contract, per the policy's endorsement."
-    acord25 = {"form": "ACORD 25 Certificate of Liability Insurance", "insured": a["insured_name"],
+    from . import agency
+    producer = agency.producer_block(ctx.config.get("profile"))
+    acord25 = {"form": "ACORD 25 Certificate of Liability Insurance", "producer": producer, "insured": a["insured_name"],
                "insured_address": a.get("mailing_address"),
                "insurers": {v: k for k, v in insurers.items()}, "coverages": coverages,
                "description_of_operations": desc.strip(), "certificate_holder": {"name": r["holder_name"], "address": r["holder_address"]},
@@ -149,7 +151,10 @@ def coi(ctx: Ctx) -> dict:
     body = f"ACORD 25 draft for {r['holder_name']}:\n{lines_txt}\nDescription: {acord25['description_of_operations']}"
     allowed += [c["effective"] for c in coverages] + [c["expiration"] for c in coverages]
     allowed += [acord25["form"], r["holder_name"]]   # the fixed form name; the requester's description earns nothing
-    return result("CSR3", "coi", "done", f"COI: ACORD 25 drafted for {r['holder_name']} on {', '.join(lines)}; awaiting release.",
-                  findings={"gate": "passed", "acord25": acord25},
+    if producer:
+        body = f"Producer: {producer['agency']} · {producer['contact']} · {producer['phone']}\n" + body
+    return result("CSR3", "coi", "done", f"COI: ACORD 25 drafted for {r['holder_name']} on {', '.join(lines)}; awaiting release"
+                  + ("." if producer else "; producer block empty (agency profile not loaded)."),
+                  findings={"gate": "passed", "acord25": acord25, "producer_loaded": bool(producer)},
                   drafts=[draft("acord", r["holder_name"], f"Certificate of insurance - {a['insured_name']}", body,
                                 "issue_coi", allowed)])

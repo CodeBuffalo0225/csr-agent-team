@@ -25,24 +25,19 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from . import schemas, thresholds
+from . import paths, schemas, thresholds
 
 ROOT = Path(__file__).resolve().parents[2]
-AGENCY = ROOT / "data" / "agency"
-MARKETS = AGENCY / "markets.csv"
-PROPOSED = AGENCY / "appetite.proposed.csv"
-APPETITE = ROOT / "data" / "appetite.csv"
 MARKET_COLUMNS = ("market", "kind", "admitted", "appointed", "lines", "states", "appetite_url", "contact", "notes")
 KINDS = ("carrier", "wholesaler", "mga")
 
 
 def _path(p, default):
-    p = Path(p) if p else default
-    return p if p.is_absolute() else ROOT / p
+    return paths.resolve(p, default)
 
 
 def load_markets(path=None) -> list:
-    p = _path(path, MARKETS)
+    p = _path(path, paths.agency_dir() / "markets.csv")
     if not p.exists():
         return None
     with p.open(newline="", encoding="utf-8") as f:
@@ -145,7 +140,7 @@ def propose(rows_in: list, markets: list, as_of: str, proposed_path=None) -> dic
             continue
         ok.append({c: (r.get(c) or "") for c in market_mod.APPETITE_COLUMNS})
     if ok:
-        p = _path(proposed_path, PROPOSED)
+        p = _path(proposed_path, paths.agency_dir() / "appetite.proposed.csv")
         _write_csv(p, _read_csv(p) + ok, market_mod.APPETITE_COLUMNS)
     return {"accepted": len(ok), "rejected": len(errors), "errors": errors}
 
@@ -155,7 +150,7 @@ def confirm(market_name: str, by: str, proposed_path=None, appetite_path=None) -
     from . import market as market_mod
     if not (by or "").strip():
         raise ValueError("confirm needs --by <the person at the agency confirming it>")
-    pp, ap = _path(proposed_path, PROPOSED), _path(appetite_path, APPETITE)
+    pp, ap = _path(proposed_path, paths.agency_dir() / "appetite.proposed.csv"), _path(appetite_path, paths.appetite())
     proposed = _read_csv(pp)
     mine = [r for r in proposed if r["carrier"].strip() == market_name]
     if not mine:

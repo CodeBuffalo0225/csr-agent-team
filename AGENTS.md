@@ -8,8 +8,10 @@ rules, stop-limiters and suggested improvements: `docs/ARCHITECTURE.md`.
 The model routes and writes; the engine computes and decides.
 
 ## Stack
-Python 3.9+ **standard library only** (`engine/csrdesk`). No pip installs. Outside data: NHTSA vPIC and the
-Census geocoder (free, keyless). Runtime data lives in `data/runtime/` and is gitignored.
+A Claude Code plugin (`.claude-plugin/`, `agents/`, `commands/`, `hooks/`) over a Python 3.9+ **standard library only**
+engine (`engine/csrdesk`). No pip installs. Outside data: NHTSA vPIC and the Census geocoder (free, keyless).
+Each agency's data lives in its own home (`$CSR_DESK_HOME`, see `engine/csrdesk/paths.py`); in this repo with no
+home set, `data/` is the development home and `data/runtime/` is gitignored.
 
 ## Commands
 ```bash
@@ -23,7 +25,9 @@ bin/csr release <id> <draft#>                  # may a human release this draft?
 bin/csr renewals <accounts.json>               # CSR 6 book sweep
 bin/csr gate judgment|message|decision|ticket|draft <file>
 bin/csr appetite | bin/csr rules               # validate the agency's appetite file / state notice rules
+bin/csr init [dir] | bin/csr readiness          # a new agency home; the deployment checklist
 bin/csr setup validate|research|propose|confirm # deployment: markets -> researched appetite -> human confirm
+bin/csr rules [confirm <STATE> --by <name>]     # notice + surplus rules; confirm is compliance's, human-only
 bin/csr ams status|preview|push|export         # Applied Epic (primary), HawkSoft, EZLynx; push needs live + config
 bin/csr replay <dir>                           # closed tickets vs what the CSRs did
 ```
@@ -47,5 +51,10 @@ Exit codes are the enforcement: 0 ok · 1 a gate or the limiter said no · 2 bad
 9. **No unverified law.** State notice and surplus-lines rules come only from rows with a source URL and a verified
    date; researched rows stay "unconfirmed" until compliance fills `confirmed_by`. No agent fills `confirmed_by`,
    in those files or in `data/appetite.csv`. The engine never interprets what a missed window means.
-10. **Sample data is fictional** (insured and carriers marked SAMPLE / fictional). Never put a real client's
+10. **Human-only steps stay human.** `setup confirm`, `rules confirm`, the live switch (`runtime/desk.json`), the kill
+    switch and the audit/store files are refused to agents by the plugin hook (`engine/csrdesk/guard.py`). Never
+    weaken the guard to make a step convenient; it fails closed.
+11. **Nothing agency-specific is committed.** Profiles, markets, confirmed appetite, AMS config, tickets and replay
+    cases live in the agency home.
+12. **Sample data is fictional** (insured and carriers marked SAMPLE / fictional). Never put a real client's
    data in `data/examples/`.

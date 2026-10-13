@@ -24,6 +24,12 @@ from .desk import Ctx, active_policy, draft, message, policy_by_number, result
 COVERAGE_CHANGES = ("ADD_DRIVER", "REMOVE_DRIVER", "ADD_VEHICLE", "REMOVE_VEHICLE", "ADD_LOCATION", "LIMIT_CHANGE")
 
 
+def _sig(ctx: Ctx) -> str:
+    """The agency's sign-off (agency.signature): producer, agency, phone, email. Empty without a profile."""
+    from . import agency
+    return agency.signature(ctx.config.get("profile"))
+
+
 def verify(ctx: Ctx) -> dict:
     a, tid = ctx.account, ctx.ticket["ticket_id"]
     fetch = ctx.fetch or publicdata._http_json
@@ -98,7 +104,7 @@ def info_request(ctx: Ctx) -> dict:
     purpose = {"QUOTE": "your quote", "RENEWAL": "your renewal", "SERVICE": "your policy change",
                "POLICY_CHECK": "your new policy", "COI": "your certificate", "CLAIM": "your claim"}[ctx.ticket["type"]]
     body = (f"Hi {name},\n\nTo finish {purpose} we need a few items:\n" + "\n".join(f"- {x}" for x in asks)
-            + "\n\nReply here or call us with any questions.\n")
+            + "\n\nReply here or call us with any questions." + _sig(ctx) + "\n")
     allowed = [a["insured_name"]] + asks
     return result("CSR5", "info_request", "needs_data", f"Client: {len(asks)} item(s) requested.",
                   findings={"asks": asks, "to": to},
@@ -113,7 +119,7 @@ def renewal_notice(ctx: Ctx) -> dict:
     to = contact.get("email") or contact.get("phone") or "client (no contact on file)"
     body = (f"Your {p['line']} policy {p['policy_number']} with {p['carrier']} expires on {p['expiration']}, "
             f"{left} days from today. To prepare your renewal, please confirm or update: annual revenue, payroll, "
-            f"employee count, locations, vehicles and drivers, and any claims or changes in operations this year.")
+            f"employee count, locations, vehicles and drivers, and any claims or changes in operations this year." + _sig(ctx))
     return result("CSR5", "renewal_notice", "done", f"Renewal notice drafted: {p['policy_number']} expires in {left} days.",
                   findings={"policy_number": p["policy_number"], "days_to_expiration": left},
                   drafts=[draft("email", to, f"Your upcoming renewal - {a['insured_name']}", body, "send_email",
@@ -144,7 +150,7 @@ def service(ctx: Ctx) -> dict:
         return result("CSR5", "service", "done", f"Service: {kind.lower().replace('_', ' ')} confirmation drafted.",
                       findings={"route": "csr5", "change_type": kind},
                       drafts=[draft("email", to, f"Confirming your request - {a['insured_name']}",
-                                    f"We received your request: {r['details']} We will confirm once the carrier processes it.",
+                                    f"We received your request: {r['details']} We will confirm once the carrier processes it." + _sig(ctx),
                                     "send_email", [r["details"], a["insured_name"]])])
     missing = []
     if kind == "ADD_DRIVER":
@@ -164,7 +170,7 @@ def service(ctx: Ctx) -> dict:
             missing.append(f"a valid VIN ({(new or {}).get('reason') or 'not decoded'})")
     if missing:
         to = (a.get("contact") or {}).get("email") or "client"
-        body = "To process your change we need:\n" + "\n".join(f"- {m}" for m in missing)
+        body = "To process your change we need:\n" + "\n".join(f"- {m}" for m in missing) + _sig(ctx)
         return result("CSR5", "service", "needs_data", f"Service: {kind} waiting on {len(missing)} item(s).",
                       findings={"route": "client", "change_type": kind, "missing": missing},
                       drafts=[draft("email", to, f"Information needed for your policy change - {a['insured_name']}",

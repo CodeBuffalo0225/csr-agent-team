@@ -3,7 +3,7 @@
 Every other agent proposes; CSR 8 writes. One writer means one dedup rule, one place PII is masked
 before storage, and one append-only event log — instead of ten agents each half-updating a record.
 
-SQLite (stdlib) at data/runtime/agency.db by default; the agency's AMS (Applied Epic, HawkSoft, EZLynx,
+SQLite (stdlib) at <home>/runtime/agency.db by default; the agency's AMS (Applied Epic, HawkSoft, EZLynx,
 QQCatalyst, NowCerts) is the production target, reached through a connector whose write tools
 policy.py classifies WRITE. This file is the local system of record until that connector is wired.
 
@@ -21,8 +21,9 @@ import secrets
 import sqlite3
 from pathlib import Path
 
+from . import paths
+
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB = ROOT / "data" / "runtime" / "agency.db"
 WRITER = "CSR8"
 
 SCHEMA = """
@@ -51,22 +52,22 @@ def name_key(name: str, zip_code: str = None) -> str:
 
 
 PEPPER_ENV = "CSR_DESK_PEPPER"
-PEPPER_FILE = ROOT / "data" / "runtime" / "pepper"
 
 
 def _pepper() -> bytes:
     """A per-install secret so a FEIN digest cannot be brute-forced (there are only 10^9 FEINs; a plain
     SHA-256 of one falls in a fraction of a second). From $CSR_DESK_PEPPER, else a random key created once in
-    data/runtime/pepper (gitignored, owner-only). Losing it only breaks dedup against older records."""
+    <home>/runtime/pepper (owner-only). Losing it only breaks dedup against older records."""
     env = os.environ.get(PEPPER_ENV)
     if env:
         return env.encode()
-    if not PEPPER_FILE.exists():
-        PEPPER_FILE.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(PEPPER_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    pepper_file = paths.runtime() / "pepper"
+    if not pepper_file.exists():
+        pepper_file.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(pepper_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(secrets.token_hex(32))
-    return PEPPER_FILE.read_text().strip().encode()
+    return pepper_file.read_text().strip().encode()
 
 
 def fein_hash(fein: str) -> str:
@@ -77,7 +78,7 @@ def fein_hash(fein: str) -> str:
 
 class Store:
     def __init__(self, path=None):
-        self.path = Path(path or DEFAULT_DB)
+        self.path = Path(path or paths.runtime() / "agency.db")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(self.path))
         self.db.executescript(SCHEMA)

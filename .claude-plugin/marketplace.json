@@ -1,0 +1,15 @@
+{
+  "name": "csr-desk",
+  "description": "Commercial-insurance agency tools: an agentic CSR desk that plugs into any agency (drafts only; every irreversible act needs a human).",
+  "owner": {
+    "name": "Travis Miragliotta",
+    "email": "tsm5110@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "csr-desk",
+      "source": "./",
+      "description": "Agentic CSR desk for commercial insurance agencies (drafts only; human approves every irreversible act)."
+    }
+  ]
+}

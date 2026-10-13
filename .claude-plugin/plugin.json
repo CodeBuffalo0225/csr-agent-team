@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "csr-desk",
+  "displayName": "CSR Desk for Commercial Insurance Agencies",
+  "version": "1.0.0",
+  "description": "An agentic CSR desk any commercial-lines agency can plug in: eleven CSR agents (intake, loss runs, COI/ACORD, markets, client desk, renewals, claims, records, dec pages, exclusions, policy checking) and an AE feedback loop. Routing, stop-limiters, gates and arithmetic are deterministic code; drafts only until the agency turns it live; every irreversible act needs a human. Ships researched NJ/NY/CT rules, Applied Epic/HawkSoft/EZLynx adapters, and a guided per-agency setup.",
+  "author": {
+    "name": "Travis Miragliotta",
+    "email": "tsm5110@gmail.com"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "insurance",
+    "commercial-lines",
+    "csr",
+    "account-executive",
+    "acord",
+    "coi",
+    "renewals",
+    "claims",
+    "applied-epic",
+    "hawksoft",
+    "ezlynx",
+    "agency"
+  ]
+}
