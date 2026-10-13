@@ -1,0 +1,4 @@
+#!/bin/sh
+# The agency CSR desk. Python 3.9+ standard library only.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHONPATH="$DIR/engine${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m csrdesk "$@"
