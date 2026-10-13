@@ -6,7 +6,8 @@ argument-hint: <ticket.json | ticket_id> [decision.json]
 You are the desk's orchestrator. Subagents cannot spawn subagents, so you call them; the engine routes.
 
 1. If `$ARGUMENTS` is a raw inquiry or a file that fails `bin/csr gate ticket`, hand it to **csr-01-intake** (quotes),
-   **csr-05-client-desk** (service), **csr-07-claims** (claims) or **csr-03-coi-acord** (certificates) to build the ticket.
+   **csr-05-client-desk** (service), **csr-07-claims** (claims), **csr-03-coi-acord** (certificates) or **csr-11-policy-check** (an issued policy
+   to check against the proposal) to build the ticket.
 2. `bin/csr run <ticket.json>`. The router (engine/csrdesk/routing.py) picks every step with an if/else rule and
    the stop-limiter (limiter.py) can halt it; do not reorder steps or skip the limiter.
 3. Only where the packet says a step needs model work, call that CSR's subagent — at most 3 in parallel:

@@ -43,7 +43,7 @@ def endorsement_status(dec: dict, requirement: str) -> dict:
 def _target_policies(ctx: Ctx) -> dict:
     """{line: policy} the review is about: in force for QUOTE/COI/SERVICE/CLAIM, the named one for RENEWAL."""
     t, a = ctx.ticket, ctx.account
-    if t["type"] == "RENEWAL":
+    if t["type"] in ("RENEWAL", "POLICY_CHECK"):
         p = policy_by_number(a, t["request"]["policy_number"])
         return {p["line"]: p} if p else {}
     on = t["request"].get("date_of_loss") or ctx.as_of

@@ -14,6 +14,10 @@ stop-limiter said no · 2 bad input.
     bin/csr audit <ticket_id>                                     verify the hash chain
     bin/csr conformance                                           spine-spec vectors against production gates
     bin/csr demo                                                  every example ticket end to end (isolated runtime)
+    bin/csr appetite [file]                                       validate the agency appetite file (default data/appetite.csv)
+    bin/csr rules [file]                                          validate the state notice rules (default data/state_rules.csv)
+    bin/csr ams status | ams export <dir>                         AMS connector state; CSR 8 store -> neutral import files
+    bin/csr replay <dir> [--live]                                 closed tickets vs what the CSRs did: agreement report
 """
 from __future__ import annotations
 
@@ -23,7 +27,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import audit, conformance, grounding, market, orchestrator, packet, policy, publicdata, renewals, schemas
+from . import ams, audit, conformance, grounding, market, orchestrator, packet, policy, publicdata, renewals, replay, schemas, staterules, store
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -132,6 +136,41 @@ def cmd_conformance(_a):
     return conformance.main()
 
 
+def cmd_appetite(a):
+    r = market.validate_appetite(a.file, _today(None))
+    print(json.dumps(r, indent=2))
+    return 0 if r["ok"] else 1
+
+
+def cmd_rules(a):
+    rows = staterules.load(a.file)
+    errors = staterules.validate(rows, _today(None))
+    status = "needs_data" if not rows else ("ok" if not errors else "invalid")
+    print(json.dumps({"status": status, "rows": len(rows), "errors": errors}, indent=2))
+    return 0 if status == "ok" else 1
+
+
+def cmd_ams(a):
+    if a.action == "status":
+        print(json.dumps(ams.connector_status(), indent=2))
+        return 0
+    if not a.out:
+        raise ValueError("ams export needs an output directory")
+    s = store.Store()
+    try:
+        print(json.dumps(ams.export(s, a.out), indent=2))
+    finally:
+        s.close()
+    return 0
+
+
+def cmd_replay(a):
+    r = replay.run_dir(a.dir, live=a.live)
+    print(json.dumps(r if a.json else {k: v for k, v in r.items() if k != "results"} |
+                     {"disagreements": [x for x in r["results"] if not x["agree"]]}, indent=2))
+    return 0 if r["disagree"] == 0 else 1
+
+
 def cmd_demo(a):
     from . import demo
     return demo.main(fetch=None, out_dir=Path(a.out) if a.out else None)
@@ -162,6 +201,11 @@ def main(argv=None) -> int:
     s = sub.add_parser("audit"); s.add_argument("ticket_id"); s.set_defaults(fn=cmd_audit)
     s = sub.add_parser("conformance"); s.set_defaults(fn=cmd_conformance)
     s = sub.add_parser("demo"); s.add_argument("--out"); s.set_defaults(fn=cmd_demo)
+    s = sub.add_parser("appetite"); s.add_argument("file", nargs="?", default="data/appetite.csv"); s.set_defaults(fn=cmd_appetite)
+    s = sub.add_parser("rules"); s.add_argument("file", nargs="?", default=None); s.set_defaults(fn=cmd_rules)
+    s = sub.add_parser("ams"); s.add_argument("action", choices=["status", "export"]); s.add_argument("out", nargs="?"); s.set_defaults(fn=cmd_ams)
+    s = sub.add_parser("replay"); s.add_argument("dir"); s.add_argument("--live", action="store_true"); s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_replay)
     args = p.parse_args(argv)
     try:
         return args.fn(args)

@@ -69,7 +69,7 @@ def _listed(pol: dict) -> list:
 def run(ctx: Ctx) -> dict:
     t, a, tid = ctx.ticket, ctx.account, ctx.ticket["ticket_id"]
     ops = " ".join(filter(None, [a.get("description_of_operations"), t["request"].get("description")])).lower()
-    if t["type"] == "RENEWAL":
+    if t["type"] in ("RENEWAL", "POLICY_CHECK"):
         pol = policy_by_number(a, t["request"]["policy_number"])
         policies = {pol["line"]: pol} if pol else {}
     else:

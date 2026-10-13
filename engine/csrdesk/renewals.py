@@ -10,7 +10,7 @@ Lapsed (days left < 0) skips every rung and escalates: an expired policy is the 
 """
 from __future__ import annotations
 
-from . import scoring, thresholds
+from . import scoring, staterules, thresholds
 from .desk import Ctx, message, policy_by_number, result
 
 
@@ -52,11 +52,18 @@ def run(ctx: Ctx) -> dict:
     for owner in sorted({r["owner"] for r in due if r["owner"] not in ("CSR5", "AE")}):
         msgs.append(message("CSR6", owner, "NOTIFY", tid, "renewal task due",
                             "; ".join(r["task"] for r in due if r["owner"] == owner)))
-    urgent = left <= 15
+    urgent = left <= thresholds.RENEWAL_ESCALATE_DAYS
+    state = (a.get("mailing_address") or {}).get("state")
+    rows = staterules.load(ctx.config.get("state_rules"))
+    rule = staterules.rule_for(state, p["line"], ctx.as_of, rows) if state else {"status": "needs_data", "value": None,
+                                                                                    "why": "no mailing state on the account"}
+    rule_txt = (f"{state} notice rules: {rule['why']}" if rule["status"] != "ok" else
+                f"{state} non-renewal notice {rule['value']['nonrenewal_notice_days']} days per agency rules (verified {rule['evidence']['observed']})")
     return result("CSR6", "renewal", "escalate" if urgent else "done",
-                  f"Renewal: {p['line']} {p['policy_number']} expires in {left} days; {len(due)} rung(s) due.",
+                  f"Renewal: {p['line']} {p['policy_number']} expires in {left} days; {len(due)} rung(s) due. {rule_txt}.",
                   findings={"policy_number": p["policy_number"], "line": p["line"], "days_to_expiration": left,
-                            "lapsed": False, "rungs_due": due, "client_notice_due": left <= thresholds.RENEWAL_NOTICE_DAYS},
+                            "lapsed": False, "rungs_due": due, "client_notice_due": left <= thresholds.RENEWAL_NOTICE_DAYS,
+                            "state_notice_rule": rule},
                   messages=msgs, escalate=f"{p['policy_number']} unbound with {left} days left" if urgent else None)
 
 

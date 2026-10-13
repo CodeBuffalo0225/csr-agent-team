@@ -20,6 +20,7 @@ RENEWAL_LADDER = (
     (30, "AE", "renewal proposal to the client"),
     (15, "AE", "unbound renewal: escalation"),
 )
+RENEWAL_ESCALATE_DAYS = 15               # inside this many days an open renewal escalates to the AE
 RENEWAL_SCAN_HORIZON_DAYS = 120          # CSR 6 opens a renewal ticket at the first rung
 
 # ── Remarket fork (CSR 6 -> CSR 4) ───────────────────────────────────────────
@@ -50,7 +51,7 @@ MAX_AE_REVISIONS_TOTAL = 6               # AE send-backs across the ticket
 MAX_MESSAGES = 80                        # bus messages on one ticket (a message storm is a loop too)
 TICKET_BUDGET = {"calls": 40, "writes": 12}   # outside calls (public data, connectors) per ticket
 WALL_CLOCK_HOURS = {                     # ticket age at which it halts to a human, by type
-    "QUOTE": 72, "RENEWAL": 24 * 30, "COI": 4, "SERVICE": 24, "CLAIM": 2,
+    "QUOTE": 72, "RENEWAL": 24 * 30, "COI": 4, "SERVICE": 24, "CLAIM": 2, "POLICY_CHECK": 72,
 }
 KILL_SWITCH = "data/runtime/STOP"        # if this file exists, every ticket halts before its next step
 

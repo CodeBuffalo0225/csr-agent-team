@@ -82,6 +82,12 @@ def plan(ctx: Ctx) -> list:
             ("CSR10:exclusions", lambda: True, "R-L2 loss facts against exclusions (prompts for the AE, never a denial)", True),
             ("CSR9:dec_review", lambda: bool(ctx.out("CSR7:fnol").get("policy_number")), "R-L3 policy found: limits and deductibles", True),
         ]
+    if kind == "POLICY_CHECK":
+        return [
+            ("CSR11:policy_check", lambda: True, "R-P1 issued policy vs proposal, field by field"),
+            ("CSR10:exclusions", lambda: True, "R-P2 exclusions on the issued forms", True),
+            ("CSR5:info_request", lambda: bool(service.collect_asks(ctx)), "R-P3 anything outstanding: one client request"),
+        ]
     raise ValueError(f"unknown ticket type {kind!r}")
 
 

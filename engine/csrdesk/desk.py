@@ -96,6 +96,8 @@ def ticket_lines(ticket: dict) -> list:
     if kind == "RENEWAL":
         p = policy_by_number(ticket["account"], r["policy_number"])
         return [p["line"]] if p else []
+    if kind == "POLICY_CHECK":
+        return [r["proposal"]["line"]]
     return []
 
 

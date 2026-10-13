@@ -117,6 +117,57 @@ def run(ctx: Ctx) -> dict:
                   messages=msgs)
 
 
+APPETITE_COLUMNS = ("carrier", "line", "states", "naics_prefixes", "min_revenue", "max_revenue", "am_best",
+                    "appetite_url", "observed", "notes")
+
+
+def validate_appetite(path, as_of: str) -> dict:
+    """Check the agency's appetite file before CSR 4 relies on it. Every problem is listed by row; the file
+    is `ok` only with no problems. Stale rows are warnings: filter_markets already drops them."""
+    rows = load_appetite(path)
+    if rows is None:
+        return {"ok": False, "status": "needs_key", "rows": 0, "errors": [f"{path} not found"], "warnings": []}
+    p = Path(path) if Path(path).is_absolute() else ROOT / path
+    with p.open(newline="", encoding="utf-8") as f:
+        header = next(csv.reader(f), [])
+    errors, warnings = [], []
+    missing = [c for c in APPETITE_COLUMNS if c not in header]
+    if missing:
+        errors.append(f"header missing {missing}")
+    for i, r in enumerate(rows, start=2):
+        where = f"row {i} ({r.get('carrier')}/{r.get('line')})"
+        if (r.get("line") or "").strip() not in schemas.LINES:
+            errors.append(f"{where}: line not in {list(schemas.LINES)}")
+        for k in ("states", "naics_prefixes"):
+            if not (r.get(k) or "").strip():
+                errors.append(f"{where}: {k} blank (use * for all)")
+        bad_states = [x for x in (r.get("states") or "").split("|") if x.strip() not in ("*",) and not schemas.STATE.match(x.strip())]
+        if bad_states:
+            errors.append(f"{where}: bad state code(s) {bad_states}")
+        for k in ("min_revenue", "max_revenue"):
+            v = (r.get(k) or "").strip()
+            try:
+                v and float(v)
+            except ValueError:
+                errors.append(f"{where}: {k} is not a number")
+        if (r.get("am_best") or "").strip() not in thresholds.AM_BEST_ORDER:
+            errors.append(f"{where}: AM Best rating {r.get('am_best')!r} not recognised")
+        try:
+            schemas.check_evidence({"status": "VERIFIED" if (r.get("appetite_url") or "").strip() else "INFERENCE",
+                                    "url": (r.get("appetite_url") or "").strip() or None,
+                                    "observed": (r.get("observed") or "").strip() or None}, as_of)
+            if not (r.get("observed") or "").strip():
+                errors.append(f"{where}: observed date blank (when was this appetite verified?)")
+            elif scoring.age_days(r["observed"].strip(), as_of) > thresholds.APPETITE_MAX_AGE_DAYS:
+                warnings.append(f"{where}: verified {r['observed']}, stale — CSR 4 will skip it")
+        except schemas.GateError as e:
+            errors.append(f"{where}: {e.code} {e.detail}")
+    if not rows:
+        errors.append("no carrier rows: fill it from your carrier appetite guides")
+    return {"ok": not errors, "status": "ok" if not errors else ("empty" if not rows else "invalid"), "rows": len(rows),
+            "errors": errors, "warnings": warnings}
+
+
 def load_judgments(path) -> list:
     """A file of CSR 4 judgments, each through the schema gate. One bad judgment fails the file."""
     items = json.loads(Path(path).read_text(encoding="utf-8"))

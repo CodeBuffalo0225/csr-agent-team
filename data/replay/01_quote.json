@@ -1,0 +1,214 @@
+{
+  "ticket_id": "Q-1001",
+  "type": "QUOTE",
+  "received": "2026-10-12T13:00:00Z",
+  "account": {
+    "insured_name": "SAMPLE Meadowlands Lawn & Snow LLC",
+    "dba": null,
+    "fein": "12-3456789",
+    "entity_type": "LLC",
+    "naics": "561730",
+    "description_of_operations": "Commercial landscaping, lawn maintenance, tree trimming under 15 feet, and snow plowing for commercial properties in Bergen County.",
+    "years_in_business": 9,
+    "mailing_address": {
+      "street": "1 Riverside Ave",
+      "city": "Lyndhurst",
+      "state": "NJ",
+      "zip": "07071"
+    },
+    "locations": [
+      {
+        "street": "1 Riverside Ave",
+        "city": "Lyndhurst",
+        "state": "NJ",
+        "zip": "07071"
+      }
+    ],
+    "annual_revenue": 1850000,
+    "payroll": 640000,
+    "employees": 14,
+    "contact": {
+      "name": "Dana Sample",
+      "email": "dana@example.com",
+      "phone": "201-555-0142"
+    },
+    "drivers": [
+      {
+        "name": "Dana Sample",
+        "dob": "1984-03-09",
+        "dl_number": "S12345678901234",
+        "dl_state": "NJ",
+        "years_licensed": 22,
+        "mvr_consent": true
+      },
+      {
+        "name": "Riley Example",
+        "dob": null,
+        "dl_number": "E98765432109876",
+        "dl_state": "NJ",
+        "years_licensed": 6,
+        "mvr_consent": true
+      }
+    ],
+    "vehicles": [
+      {
+        "vin": "1FTFW1E55NFA12345",
+        "garaging_zip": "07071",
+        "use": "service",
+        "stated_gvw": null
+      },
+      {
+        "vin": "3C6UR5DL8KG512345",
+        "garaging_zip": "07071",
+        "use": "service",
+        "stated_gvw": null
+      },
+      {
+        "vin": "1FVACWDT5HHJ12345",
+        "garaging_zip": "07071",
+        "use": "commercial",
+        "stated_gvw": null
+      },
+      {
+        "vin": "1FTFW1E50NFA12346",
+        "garaging_zip": "07071",
+        "use": "service",
+        "stated_gvw": null
+      }
+    ],
+    "property_schedule": [],
+    "prior_policies": [
+      {
+        "line": "GL",
+        "carrier": "Sample Mutual (fictional)",
+        "policy_number": "SMGL-2025-0187",
+        "effective": "2025-11-15",
+        "expiration": "2026-11-15",
+        "premium": 8400,
+        "renewal_rate_change_pct": 6,
+        "nonrenewal_notice": false,
+        "dec_page": {
+          "limits": {
+            "each_occurrence": 1000000,
+            "general_aggregate": 2000000,
+            "products_completed_ops_aggregate": 2000000,
+            "personal_advertising_injury": 1000000
+          },
+          "deductibles": {
+            "bodily_injury_property_damage": 1000
+          },
+          "forms": [
+            "CG 00 01 Commercial General Liability Coverage Form",
+            "CG 20 10 Additional Insured - Owners, Lessees or Contractors"
+          ],
+          "endorsements": [
+            "Blanket additional insured where required by written contract"
+          ],
+          "exclusions": [
+            "CG 21 49 Total Pollution Exclusion Endorsement",
+            "Snow and ice removal operations exclusion"
+          ]
+        }
+      },
+      {
+        "line": "AUTO",
+        "carrier": "Example Casualty (fictional)",
+        "policy_number": "ECBA-26-55120",
+        "effective": "2025-11-20",
+        "expiration": "2026-11-20",
+        "premium": 21600,
+        "renewal_rate_change_pct": 14,
+        "nonrenewal_notice": false,
+        "dec_page": {
+          "limits": {
+            "combined_single_limit": 1000000
+          },
+          "deductibles": {
+            "collision": 1000,
+            "comprehensive": 500
+          },
+          "forms": [
+            "CA 00 01 Business Auto Coverage Form"
+          ],
+          "endorsements": [],
+          "exclusions": []
+        }
+      }
+    ],
+    "loss_runs": [
+      {
+        "line": "GL",
+        "carrier": "Sample Mutual (fictional)",
+        "valued_as_of": "2026-06-30",
+        "period_start": "2021-11-15",
+        "period_end": "2026-06-30",
+        "claims": [
+          {
+            "date_of_loss": "2024-01-20",
+            "status": "CLOSED",
+            "paid": 18500,
+            "reserved": 0,
+            "description": "Third-party slip on walkway at client site after snow service"
+          },
+          {
+            "date_of_loss": "2025-05-03",
+            "status": "CLOSED",
+            "paid": 2100,
+            "reserved": 0,
+            "description": "Mower threw stone, broke client window"
+          }
+        ]
+      },
+      {
+        "line": "AUTO",
+        "carrier": "Example Casualty (fictional)",
+        "valued_as_of": "2026-09-15",
+        "period_start": "2021-11-20",
+        "period_end": "2026-09-15",
+        "claims": [
+          {
+            "date_of_loss": "2025-08-11",
+            "status": "OPEN",
+            "paid": 24200,
+            "reserved": 7000,
+            "description": "Rear-ended a passenger car while towing a trailer; third-party BI"
+          }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "lines": [
+      "GL",
+      "AUTO",
+      "UMBRELLA"
+    ],
+    "effective_date": "2026-11-15",
+    "contract_requirements": {
+      "limits": {
+        "GL.each_occurrence": 1000000,
+        "GL.general_aggregate": 2000000,
+        "AUTO.combined_single_limit": 1000000,
+        "UMBRELLA.each_occurrence": 2000000
+      },
+      "additional_insured": true,
+      "waiver_of_subrogation": true,
+      "primary_noncontributory": true
+    }
+  },
+  "as_of": "2026-10-12",
+  "now": "2026-10-12T13:30:00Z",
+  "expected": {
+    "steps_include": [
+      "CSR1:intake",
+      "CSR2:loss_runs",
+      "CSR9:dec_review",
+      "CSR10:exclusions"
+    ],
+    "blocking_lines": [
+      "AUTO"
+    ],
+    "status": "AWAITING_AE",
+    "escalated": false
+  }
+}

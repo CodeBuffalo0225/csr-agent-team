@@ -1,6 +1,6 @@
 # Agency CSR Desk: Architecture
 
-Ten CSR agents and an AE feedback loop for a commercial-lines agency. The goal is that the AE opens one
+Ten CSR agents (plus CSR 11, policy checking) and an AE feedback loop for a commercial-lines agency. The goal is that the AE opens one
 packet per ticket, sees what is on fire first, and approves, sends back or rejects in a minute. CSRs
 can use the same desk: every step a CSR does by hand here is a step they can check instead of type.
 
@@ -20,6 +20,7 @@ flowchart TD
     T -->|COI| C9c[CSR 9 Dec pages]
     T -->|SERVICE| C5s[CSR 5 Client desk]
     T -->|CLAIM| C7[CSR 7 Claims FNOL]
+    T -->|POLICY_CHECK<br/>issued policy arrives| C11[CSR 11 Policy check<br/>issued vs proposal] --> C10p[CSR 10 issued forms] --> C8
 
     C1 --> C5v[CSR 5 Verify<br/>NHTSA VIN decode, Census geocode]
     C5v --> C2[CSR 2 Loss runs]
@@ -92,6 +93,7 @@ teams loop forever. "All in communication" here means everyone can talk; one pla
 | 8 | Records | the database | the **only writer**: masked account, FEIN as a hash, dedup FEIN → name+ZIP, append-only events (DB triggers) | reconcile conflicts for the AE |
 | 9 | Dec pages | what coverage says | limit shortfalls (with umbrella check), AI/WOS/PNC endorsement presence by ISO form number or phrase, claims-made flag; missing dec → request, never "looks fine" | PDF → structured dec page |
 | 10 | Exclusions | what coverage removes | review prompts by operation (landscaper: pollution, snow; contractor: residential, action-over, subcontractor; restaurant: assault & battery, liquor) and by loss facts; residential exclusion on a residential COI → CRITICAL | read the actual form wording |
+| 11 | Policy check | issued policy vs what was sold | field-by-field compare: lower/missing limit, higher deductible, dropped form or endorsement, new exclusion, carrier/term change, higher premium are HIGH and hold the policy; better-for-client differences are LOW | none; CSR 9 transcribes the issued dec page |
 | AE | Account executive (human) | decisions | the packet, ordered: escalations → halts → drafts awaiting release → outstanding | ae-briefer explains and writes the decision JSON |
 
 ## 3. if/else, all of it in code
@@ -119,6 +121,9 @@ no policy in force · dec not reviewed · requirement exceeds dec · critical ex
 **and signed MVR consent** first; add vehicle → VIN decoded first; policy question → CSR 9 + 10 → AE (CSR 5
 never interprets coverage); name change → AE (new entity = new insured); address/billing → CSR 5
 confirmation.
+
+**POLICY_CHECK:** R-P1 compare issued vs proposal → any HIGH mismatch escalates (the policy is held) → R-P2 exclusions on
+the issued forms (essential) → R-P3 client request *if* anything is outstanding. No dec page yet → CSR 9 transcribes it first.
 
 **CLAIM:** no policy on the date of loss → AE as a coverage question (the client is never told "not
 covered") · injury or ≥ $25k → URGENT · reported >30 days late → late-notice flag · otherwise FNOL draft.
@@ -185,44 +190,57 @@ These are changes to the workflow as specified, ordered by how much AE time they
    every AMS already has.
 4. **One client voice.** *Built:* every CSR's questions merge into one CSR 5 email, deduped, max three. Clients
    who get four emails from four CSRs stop answering.
-5. **Add CSR 11, policy checking.** The ten roles skip the biggest E&O control in an agency: comparing the
-   issued policy against the proposal and binder. It reuses CSR 9's dec-page parser: proposal limits, forms
-   and endorsements vs the policy as issued, with every mismatch sent to the AE before the policy goes to the
-   client.
+5. **Add CSR 11, policy checking.** *Built.* The ten roles skip the biggest E&O control in an agency: comparing the
+   issued policy against the proposal and binder. It reuses CSR 9's dec-page parser, and every mismatch goes to
+   the AE before the policy goes to the client.
 6. **A certificate-holder library.** Repeat holders (property managers, GCs) send the same requirements every
    time. Store them per holder; a COI request from a known holder runs the gates with no CSR touch.
 7. **Merge CSR 9 + CSR 10 output into one coverage review for the AE.** They stay separate agents (different
    skills), but the AE should read one gap list, not two.
 8. **Premium-audit prep (WC/GL).** 60 days before audit, CSR 5 collects payroll and sales by class, so the
    audit doesn't produce a surprise bill.
-9. **Wire the AMS and the carrier side.** CSR 8 to Applied Epic / HawkSoft / EZLynx / QQCatalyst /
+9. **Wire the AMS and the carrier side.** *Export built* (`bin/csr ams export`: masked accounts, tickets and events as
+   neutral import files); the live connector is `needs_key` until the agency picks its AMS. CSR 8 to Applied Epic / HawkSoft / EZLynx / QQCatalyst /
    NowCerts through a connector (writes are classified WRITE). Carrier download and status through IVANS or the
    carrier portals (all submit/endorse/file tools are IRREVERSIBLE).
-10. **Measure, then claim.** Log turnaround per ticket type and AE touches per ticket from the audit trail
-    before stating any time saved. The trail already carries the timestamps.
+10. **Measure, then claim.** *Harness built* (`bin/csr replay`): closed tickets with what the CSRs actually did,
+    scored as agreement. Log turnaround per ticket type from the audit trail before stating any time saved.
 
-## 8. Production readiness
+## 8. Operations: what the agency loads
+
+The desk ships with none of the agency's own data, on purpose. Each piece has a template, a validator, and an
+honest state until it's loaded.
+
+| Data | Load into | Check with | Until it's loaded |
+|---|---|---|---|
+| Carrier appetite guide | `data/appetite.csv` (template `data/appetite.example.csv`) | `bin/csr appetite` | CSR 4 is `needs_key`: no carriers from memory |
+| State cancellation / non-renewal notice periods | `data/state_rules.csv` (template `data/state_rules.example.csv`), each row with its statute/bulletin URL and verified date | `bin/csr rules` | every renewal packet shows "Data gap: no verified NJ notice rule" |
+| AMS | an MCP connector for the agency's AMS | `bin/csr ams status` | `needs_key`; `bin/csr ams export <dir>` writes masked import files |
+| Closed tickets for evaluation | `data/runtime/replay/` (gitignored: real tickets hold PII), format in `replay.py` | `bin/csr replay data/runtime/replay` | only the six SAMPLE replay cases exist |
+
+All four files are gitignored when filled. A state-rule value nobody verified would be a legal claim the engine
+made up, so rows without a source URL and verified date are rejected, and rows older than a year are flagged stale.
+
+## 9. Production readiness
 
 ```
 PRODUCTION READINESS — agency CSR desk
 1. Clear Goal .............. ✅  one job per CSR, testable outputs; AE packet is the success surface
-2. Trusted Tooling ......... ⚠️  NHTSA + Census real and tested; AMS, carrier portals, email not wired (drafts only)
+2. Trusted Tooling ......... ⚠️  NHTSA + Census real and tested; AMS export built, live AMS/carrier/email not wired (drafts only)
 3. Strong Context/Memory ... ✅  ticket state persisted per ticket; outputs of earlier steps feed later ones
 4. Guardrails/Approvals .... ✅  schema, grounding, fork, scoped approval, PII masking, fail-closed classifier
-5. Evaluation/Testing ...... ⚠️  151 tests incl. 63 spine vectors, on SAMPLE data; no real-book replay yet
+5. Evaluation/Testing ...... ⚠️  tests incl. 63 spine vectors + replay harness; replayed on SAMPLE cases only
 6. Observability/Audit ..... ✅  hash-chained audit per ticket; rule id on every routing decision
 7. Orchestration ........... ✅  explicit state machine, retries with backoff on outside calls, fast lane
 8. Human Oversight ......... ✅  every IRREVERSIBLE act needs the AE; halts go to a human with context
 9. Cost/Token Bounds ....... ✅  hop, visit, ping-pong, message, budget, revision and wall-clock caps
 
 VERDICT: NEEDS WORK, for production. It's ready to run as a drafts-only desk on real tickets.
-Top fixes: (1) load the agency's appetite guide into data/appetite.csv; (2) wire CSR 8 to the AMS;
-(3) replay 20 closed tickets from the real book through it and compare against what the CSRs did;
-(4) encode the state-specific rules the agency writes in (cancellation/non-renewal notice periods) as
-thresholds before CSR 6 drafts anything about them.
+What remains is the agency's, not code: load the appetite guide and verified state rules, pick the AMS,
+and replay 20 closed tickets (`bin/csr replay`) before trusting it unsupervised.
 ```
 
-## 9. What this is not
+## 10. What this is not
 
 - It doesn't bind, issue, file, submit or send. Drafts only, until the agency sets `live` and the AE grants a
   scoped approval per act.

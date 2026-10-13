@@ -75,6 +75,7 @@ def main(fetch=None, out_dir: Path = None) -> int:
     show("RENEWAL ECBA-26-55120 (auto)", start("renewal.json"))
     show("CLAIM L-3001 (injury)", start("claim.json"))
     show("SERVICE S-4001 (add vehicle)", start("service.json"))
+    show("POLICY_CHECK P-5001 (issued vs proposal)", start("policy_check.json"))
 
     sweep = renewals.scan([_ticket("quote.json")["account"]], AS_OF)
     log.append(f"CSR6 book sweep: {len(sweep)} renewal(s) open: "

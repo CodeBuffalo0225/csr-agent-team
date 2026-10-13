@@ -37,6 +37,10 @@ def build(run: dict, as_of: str) -> dict:
             actions.append(f"Draft #{d['index']} DISCARDED by grounding gate: ungrounded {d['gate']['ungrounded']}")
     for o in outstanding:
         actions.append(f"Outstanding: {o}")
+    for step, r in run["steps"].items():
+        rule = (r.get("findings") or {}).get("state_notice_rule")
+        if rule and rule["status"] != "ok":
+            actions.append(f"Data gap ({step}): {rule['why']}")
     for b in blocked:
         actions.append(f"Blocked: {b}")
     acct = run["ticket"]["account"]

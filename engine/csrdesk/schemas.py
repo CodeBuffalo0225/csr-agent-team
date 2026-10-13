@@ -31,8 +31,8 @@ JUDGMENT_KEYS = ("carrier", "scores", "rationale")
 # Keys only the engine may produce. A model payload carrying one is self-grading (S2).
 COMPUTED_KEYS = ("total", "tier", "score", "rank", "priority", "age_days")
 
-AGENTS = ("CSR1", "CSR2", "CSR3", "CSR4", "CSR5", "CSR6", "CSR7", "CSR8", "CSR9", "CSR10", "AE")
-TICKET_TYPES = ("QUOTE", "RENEWAL", "COI", "SERVICE", "CLAIM")
+AGENTS = ("CSR1", "CSR2", "CSR3", "CSR4", "CSR5", "CSR6", "CSR7", "CSR8", "CSR9", "CSR10", "CSR11", "AE")
+TICKET_TYPES = ("QUOTE", "RENEWAL", "COI", "SERVICE", "CLAIM", "POLICY_CHECK")
 LINES = ("GL", "AUTO", "WC", "PROPERTY", "UMBRELLA", "BOP", "PROFESSIONAL", "CYBER", "INLAND_MARINE",
          "LIQUOR", "EPLI")
 ENTITY_TYPES = ("INDIVIDUAL", "PARTNERSHIP", "LLC", "CORPORATION", "S_CORPORATION", "NONPROFIT", "JOINT_VENTURE",
@@ -59,12 +59,15 @@ ACCOUNT_KEYS = ("insured_name", "dba", "fein", "entity_type", "naics", "descript
                 "contact", "drivers", "vehicles", "property_schedule", "prior_policies", "loss_runs")
 REQUIREMENT_KEYS = ("limits", "additional_insured", "waiver_of_subrogation", "primary_noncontributory")
 TICKET_KEYS = ("ticket_id", "type", "received", "account", "request")
+PROPOSAL_KEYS = ("line", "carrier", "effective", "expiration", "premium", "limits", "deductibles", "forms", "endorsements",
+                 "exclusions")
 REQUEST_KEYS = {
     "QUOTE": ("lines", "effective_date", "contract_requirements"),
     "RENEWAL": ("policy_number",),
     "COI": ("holder_name", "holder_address", "lines", "description", "project_type", "requirements"),
     "SERVICE": ("change_type", "details", "driver", "vehicle"),
     "CLAIM": ("line", "date_of_loss", "description", "injury", "estimated_amount", "reported_by"),
+    "POLICY_CHECK": ("policy_number", "proposal"),
 }
 REQUEST_REQUIRED = {
     "QUOTE": ("lines", "effective_date"),
@@ -72,6 +75,7 @@ REQUEST_REQUIRED = {
     "COI": ("holder_name", "holder_address", "lines", "requirements"),
     "SERVICE": ("change_type", "details"),
     "CLAIM": ("line", "date_of_loss", "description", "injury"),
+    "POLICY_CHECK": ("policy_number", "proposal"),
 }
 DECISION_KEYS = ("ticket_id", "decision", "target", "note", "approvals")
 MESSAGE_KEYS = ("sender", "to", "kind", "ticket_id", "subject", "body")
@@ -434,6 +438,19 @@ def check_ticket(t: Any, path: str = "$") -> dict:
         _bool(r, "injury", rp)
         _num(r, "estimated_amount", rp)
         _str(r, "reported_by", rp, nullable=True, max_len=120)
+    elif kind == "POLICY_CHECK":
+        _str(r, "policy_number", rp, max_len=60)
+        pr, pp = r["proposal"], f"{rp}.proposal"
+        _keys(pr, pp, PROPOSAL_KEYS, ("line", "carrier", "effective", "expiration", "limits"))
+        _enum(pr, "line", pp, LINES)
+        _str(pr, "carrier", pp, max_len=120)
+        _date(pr, "effective", pp, nullable=False)
+        _date(pr, "expiration", pp, nullable=False)
+        _num(pr, "premium", pp)
+        _amounts(pr, "limits", pp)
+        _amounts(pr, "deductibles", pp)
+        for k in ("forms", "endorsements", "exclusions"):
+            _str_list(pr, k, pp)
     return t
 
 

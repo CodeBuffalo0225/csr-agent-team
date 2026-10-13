@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from . import (acord, audit, claimsdesk, decpages, exclusions, grounding, intake, lossruns, market, packet,
-               pii, policy, renewals, routing, schemas, service, store, thresholds)
+               pii, policy, policycheck, renewals, routing, schemas, service, store, thresholds)
 from .desk import Ctx, result
 from .limiter import check as limiter_check, check_revision
 
@@ -38,6 +38,7 @@ WORKERS = {
     "CSR7:fnol": claimsdesk.run,
     "CSR9:dec_review": decpages.run,
     "CSR10:exclusions": exclusions.run,
+    "CSR11:policy_check": policycheck.run,
 }
 
 
