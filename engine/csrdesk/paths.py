@@ -28,13 +28,33 @@ SHIPPED = ROOT / "data"
 ENV = "CSR_DESK_HOME"
 
 
+class HomeNotSet(RuntimeError):
+    pass
+
+
+def installed() -> bool:
+    """True when this code runs from an installed plugin (Claude Code's plugin cache), not a repo checkout."""
+    return "/.claude/plugins/" in str(ROOT).replace("\\", "/") or not (ROOT / ".git").exists()
+
+
+def source() -> str:
+    if os.environ.get(ENV):
+        return "env"
+    if (Path.cwd() / "csr-desk" / "agency" / "agency.json").exists():
+        return "cwd"
+    return "dev"
+
+
 def home() -> Path:
-    env = os.environ.get(ENV)
-    if env:
-        return Path(env).expanduser()
-    local = Path.cwd() / "csr-desk"
-    if (local / "agency" / "agency.json").exists():
-        return local
+    """$CSR_DESK_HOME; else ./csr-desk if it holds an agency; else, only in a git checkout, the repo's data/.
+    An installed plugin raises HomeNotSet rather than write agency data into its own replaceable directory."""
+    s = source()
+    if s == "env":
+        return Path(os.environ[ENV]).expanduser()
+    if s == "cwd":
+        return Path.cwd() / "csr-desk"
+    if installed():
+        raise HomeNotSet(f"no agency home: set {ENV} (bin/csr init <dir> creates one). Agency data never goes in the plugin.")
     return SHIPPED
 
 

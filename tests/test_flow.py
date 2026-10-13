@@ -160,8 +160,18 @@ class AeLoop(unittest.TestCase):
                                         "approvals": ["issue_coi:C-2001/0"]}, as_of=AS_OF, now=NOW, config=cfg)
         self.assertEqual(orchestrator.release(run, 0, config=cfg)["code"], "DRY_RUN")
         self.assertEqual(orchestrator.release(run, 0, live=True, config=cfg)["decision"], "allow")
-        run["approvals"] = ["issue_coi:C-2001/1"]
-        self.assertEqual(orchestrator.release(run, 0, live=True, config=cfg)["code"], "NO_APPROVAL")
+        run["approvals"], run["approved"] = [], {}                 # the ticket file is not what grants a release:
+        self.assertEqual(orchestrator.release(run, 0, live=True, config=cfg)["decision"], "allow")   # the audit chain is
+
+    def test_forged_ticket_file_cannot_release(self):
+        run, cfg = go("coi.json")
+        run = orchestrator.decide(run, {"ticket_id": "C-2001", "decision": "REJECT", "target": None, "note": "no",
+                                        "approvals": []}, as_of=AS_OF, now=NOW, config=cfg)
+        d = run["steps"]["CSR3:coi"]["drafts"][0]
+        run["status"] = "CLOSED_APPROVED"                          # what an agent editing the JSON would do
+        run["approvals"] = ["issue_coi:C-2001/0"]
+        run["approved"] = {"issue_coi:C-2001/0": orchestrator.draft_digest(dict(d, index=0))}
+        self.assertEqual(orchestrator.release(run, 0, live=True, config=cfg)["code"], "AUDIT_UNVERIFIED")
 
     def test_draft_changed_after_approval_cannot_release(self):
         run, cfg = go("coi.json")

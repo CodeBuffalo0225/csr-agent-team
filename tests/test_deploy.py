@@ -55,11 +55,15 @@ class Onboarding(unittest.TestCase):
                              appetite_row("Admitted Co (fictional)", confirmed="the subagent")], MARKETS, AS_OF, proposed_path=prop)
         self.assertEqual((r["accepted"], r["rejected"]), (1, 2))
         self.assertIsNone(market.load_appetite(str(app)))                          # proposed is not live
-        c = markets.confirm("Admitted Co (fictional)", "Ops Manager", proposed_path=prop, appetite_path=app)
+        c = markets.confirm("Admitted Co (fictional)", "Ops Manager", proposed_path=prop, appetite_path=app,
+                            markets_rows=MARKETS, as_of=AS_OF, attest=lambda action, expected, by=None: by or "Test Person")
         self.assertEqual(c["confirmed_rows"], 1)
         self.assertEqual(market.load_appetite(str(app))[0]["confirmed_by"], "Ops Manager")
-        with self.assertRaises(ValueError):
-            markets.confirm("Admitted Co (fictional)", "", proposed_path=prop, appetite_path=app)
+        with self.assertRaises(ValueError):                         # nothing left to confirm
+            markets.confirm("Admitted Co (fictional)", "x", proposed_path=prop, appetite_path=app, markets_rows=MARKETS, attest=lambda action, expected, by=None: by or "Test Person")
+        with self.assertRaises(PermissionError):                    # no terminal: an agent cannot confirm
+            markets.propose([appetite_row("Admitted Co (fictional)", confirmed="")], MARKETS, AS_OF, proposed_path=prop)
+            markets.confirm("Admitted Co (fictional)", "Ops", proposed_path=prop, appetite_path=app, markets_rows=MARKETS, as_of=AS_OF)
 
 
 class AdmittedFirst(unittest.TestCase):
@@ -113,11 +117,22 @@ class ResearchedRules(unittest.TestCase):
         self.assertIn("non-renewal notice 30 days", run["steps"]["CSR6:renewal"]["summary"])
         self.assertIn("26 days left and no non-renewal notice on file", run["steps"]["CSR6:renewal"]["summary"])
 
-    def test_confirmed_rule_is_ok(self):
-        rows = staterules.load()
-        for r in rows:
-            r["confirmed_by"] = "Compliance"
-        self.assertEqual(staterules.rule_for("NJ", "GL", AS_OF, rows)["status"], "ok")
+    def test_confirmed_rule_is_ok_and_a_typed_name_is_not(self):
+        d = tmp()
+        with mock.patch.dict(os.environ, {"CSR_DESK_HOME": str(d)}):
+            rows = staterules.load()
+            for r in rows:
+                r["confirmed_by"] = "Compliance"                    # typing a name into the CSV confirms nothing
+            self.assertEqual(staterules.rule_for("NJ", "GL", AS_OF, rows)["status"], "unconfirmed")
+            staterules.confirm("NJ", "Lee Compliance", attest=lambda action, expected, by=None: by or "Test Person")
+            self.assertEqual(staterules.rule_for("NJ", "GL", AS_OF)["status"], "ok")
+            with open(d / "state_rules.csv", "w") as f:              # the agency changes a NJ row: the sign-off lapses
+                w = csv.DictWriter(f, list(rows[0].keys()))
+                w.writeheader()
+                w.writerow(dict(rows[0], nonrenewal_notice_days="45", confirmed_by=""))
+            r = staterules.rule_for("NJ", rows[0]["line"], AS_OF)
+            self.assertEqual(r["status"], "unconfirmed")
+            self.assertIn("changed since compliance confirmed", r["why"])
 
 
 class AmsAdapters(unittest.TestCase):
@@ -143,17 +158,30 @@ class AmsAdapters(unittest.TestCase):
     def test_push_needs_config_token_and_live(self):
         d = tmp()
         cfgp = d / "ams.json"
-        cfgp.write_text(json.dumps({"system": "applied_epic", "base_url": "https://ams.example.invalid", "token_env": "TEST_EPIC_TOKEN",
+        cfgp.write_text(json.dumps({"system": "applied_epic", "base_url": "https://ams.example.invalid", "token_env": "CSR_DESK_TEST_EPIC",
                                     "paths": {"note": "/configured/by/agency"}}))
         run = self._run()
         self.assertEqual(ams.push(run, live=True, config_path=str(cfgp))["status"], "needs_key")   # token env absent
         sent = []
-        with mock.patch.dict(os.environ, {"TEST_EPIC_TOKEN": "t"}):
+        with mock.patch.dict(os.environ, {"CSR_DESK_TEST_EPIC": "t", "CSR_DESK_HOME": str(d)}):
             r = ams.push(run, live=False, config_path=str(cfgp), transport=lambda u, p, t: sent.append(u) or {"http_status": 200})
             self.assertEqual((r["results"][0]["code"], sent), ("DRY_RUN", []))                   # not live: nothing sent
             r = ams.push(run, live=True, config_path=str(cfgp), transport=lambda u, p, t: sent.append(u) or {"http_status": 200})
-        self.assertEqual(r["status"], "pushed")
-        self.assertEqual(sent, ["https://ams.example.invalid/configured/by/agency"])
+            self.assertEqual(r["status"], "pushed")
+            self.assertEqual(sent, ["https://ams.example.invalid/configured/by/agency"])
+            self.assertEqual(ams.push(run, live=True, config_path=str(cfgp), transport=lambda u, p, t: sent.append(u))["status"],
+                             "already_pushed")                     # idempotent: the same note is not pushed twice
+            self.assertEqual(ams.connector_status(config_path=str(cfgp))["status"], "connected")
+            (d / "runtime" / "STOP").write_text("x")
+            self.assertEqual(ams.push(run, live=True, config_path=str(cfgp))["code"], "KILL_SWITCH")
+
+    def test_config_cannot_aim_at_other_secrets_or_plain_http(self):
+        cfgp = tmp() / "ams.json"
+        cfgp.write_text(json.dumps({"system": "hawksoft", "base_url": "http://evil.example", "token_env": "ANTHROPIC_API_KEY",
+                                    "paths": {"note": "/n"}}))
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "secret"}):
+            miss = ams.connector_status(config_path=str(cfgp))["missing"]
+        self.assertTrue(any("https" in m for m in miss) and any("CSR_DESK_" in m for m in miss))
 
 
 if __name__ == "__main__":

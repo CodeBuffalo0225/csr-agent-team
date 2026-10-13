@@ -113,50 +113,79 @@ def _write_csv(p: Path, rows: list, columns) -> None:
         w.writerows(rows)
 
 
+def check_proposed(r: dict, names: dict, as_of: str):
+    """The reason a proposed appetite row cannot be used, or None. Run at propose AND again at confirm, so a row
+    hand-edited into the proposals file between the two is caught."""
+    where = f"({r.get('carrier')}/{r.get('line')})"
+    if (r.get("carrier") or "").strip() not in names:
+        return f"{where}: not an appointed market in markets.csv"
+    if (r.get("line") or "").strip() not in schemas.LINES:
+        return f"{where}: line not in {list(schemas.LINES)}"
+    if not (r.get("states") or "").strip() or not (r.get("naics_prefixes") or "").strip():
+        return f"{where}: states and naics_prefixes are required (* for all)"
+    if not (r.get("appetite_url") or "").strip() or not (r.get("observed") or "").strip():
+        return f"{where}: needs the appetite_url it was read from and the observed date"
+    try:
+        schemas.check_evidence({"status": "VERIFIED", "url": r["appetite_url"].strip(), "observed": r["observed"].strip()}, as_of)
+    except schemas.GateError as e:
+        return f"{where}: {e.code}"
+    if (r.get("am_best") or "").strip() not in thresholds.AM_BEST_ORDER:
+        return f"{where}: AM Best rating missing or unrecognised (read it from AM Best, not the carrier page)"
+    return None
+
+
 def propose(rows_in: list, markets: list, as_of: str, proposed_path=None) -> dict:
     """Add proposed appetite rows. Each must name an appointed market, cite a URL and a date, and carry no
-    confirmation (a subagent cannot confirm its own research)."""
+    confirmation (a subagent cannot confirm its own research). Identical proposals are not added twice."""
     from . import market as market_mod
     names = appointed(markets)
     errors, ok = [], []
+    p = _path(proposed_path, paths.agency_dir() / "appetite.proposed.csv")
+    existing = _read_csv(p)
+    seen = {tuple((x.get(c) or "") for c in market_mod.APPETITE_COLUMNS) for x in existing}
     for i, r in enumerate(rows_in):
-        where = f"proposed[{i}] ({r.get('carrier')}/{r.get('line')})"
-        if (r.get("carrier") or "").strip() not in names:
-            errors.append(f"{where}: not an appointed market in markets.csv")
-            continue
         if (r.get("confirmed_by") or "").strip():
-            errors.append(f"{where}: a proposal cannot carry confirmed_by; a person confirms it with setup confirm")
+            errors.append(f"proposed[{i}]: a proposal cannot carry confirmed_by; a person confirms it with setup confirm")
             continue
-        if not (r.get("appetite_url") or "").strip() or not (r.get("observed") or "").strip():
-            errors.append(f"{where}: needs the appetite_url it was read from and the observed date")
+        why = check_proposed(r, names, as_of)
+        if why:
+            errors.append(f"proposed[{i}] {why}")
             continue
-        try:
-            schemas.check_evidence({"status": "VERIFIED", "url": r["appetite_url"].strip(), "observed": r["observed"].strip()}, as_of)
-        except schemas.GateError as e:
-            errors.append(f"{where}: {e.code}")
-            continue
-        if (r.get("am_best") or "").strip() not in thresholds.AM_BEST_ORDER:
-            errors.append(f"{where}: AM Best rating missing or unrecognised (read it from AM Best, not the carrier page)")
-            continue
-        ok.append({c: (r.get(c) or "") for c in market_mod.APPETITE_COLUMNS})
+        row = {c: (r.get(c) or "") for c in market_mod.APPETITE_COLUMNS}
+        key = tuple(row[c] for c in market_mod.APPETITE_COLUMNS)
+        if key not in seen:
+            seen.add(key)
+            ok.append(row)
     if ok:
-        p = _path(proposed_path, paths.agency_dir() / "appetite.proposed.csv")
-        _write_csv(p, _read_csv(p) + ok, market_mod.APPETITE_COLUMNS)
+        _write_csv(p, existing + ok, market_mod.APPETITE_COLUMNS)
     return {"accepted": len(ok), "rejected": len(errors), "errors": errors}
 
 
-def confirm(market_name: str, by: str, proposed_path=None, appetite_path=None) -> dict:
-    """A named person confirms one market's proposed rows; they move into the live appetite file."""
+def confirm(market_name: str, by: str = None, proposed_path=None, appetite_path=None, *, markets_rows: list = None,
+            as_of: str = None, attest=None) -> dict:
+    """A person at the agency confirms one market's proposed rows. Each row is re-checked; a confirmed row replaces
+    any earlier confirmed row for the same market and line (a narrowed appetite does not leave the old one live).
+    Human-only: an interactive terminal and the market's name typed back (humans.attest)."""
+    import datetime as _dt
+    from . import humans
     from . import market as market_mod
-    if not (by or "").strip():
-        raise ValueError("confirm needs --by <the person at the agency confirming it>")
-    pp, ap = _path(proposed_path, paths.agency_dir() / "appetite.proposed.csv"), _path(appetite_path, paths.appetite())
+    as_of = as_of or _dt.date.today().isoformat()
+    pp = _path(proposed_path, paths.agency_dir() / "appetite.proposed.csv")
+    ap = _path(appetite_path, paths.appetite())
     proposed = _read_csv(pp)
     mine = [r for r in proposed if r["carrier"].strip() == market_name]
     if not mine:
         raise ValueError(f"no proposed rows for {market_name!r}")
+    names = appointed(markets_rows if markets_rows is not None else (load_markets() or []))
+    bad = [w for w in (check_proposed(r, names, as_of) for r in mine) if w]
+    if bad:
+        raise ValueError(f"proposed rows for {market_name!r} no longer pass the checks: {bad}")
+    who = (attest or humans.attest)(f"Confirm {len(mine)} appetite row(s) for {market_name} (read each against its appetite_url)",
+                                    market_name, by)
     for r in mine:
-        r["confirmed_by"] = by.strip()
-    _write_csv(ap, _read_csv(ap) + mine, market_mod.APPETITE_COLUMNS)
+        r["confirmed_by"] = who
+    lines = {r["line"].strip() for r in mine}
+    kept = [r for r in _read_csv(ap) if not (r["carrier"].strip() == market_name and r["line"].strip() in lines)]
+    _write_csv(ap, kept + mine, market_mod.APPETITE_COLUMNS)
     _write_csv(pp, [r for r in proposed if r["carrier"].strip() != market_name], market_mod.APPETITE_COLUMNS)
-    return {"market": market_name, "confirmed_rows": len(mine), "by": by.strip()}
+    return {"market": market_name, "confirmed_rows": len(mine), "by": who, "superseded_lines": sorted(lines)}

@@ -18,10 +18,12 @@ stop-limiter said no · 2 bad input.
     bin/csr rules [file]                                          validate notice + surplus lines rules; count unconfirmed rows
     bin/csr init [dir]                                            create an agency home (never overwrites)
     bin/csr readiness [--json]                                    the deployment checklist: READY or what is left
-    bin/csr rules confirm <STATE> --by <name>                     compliance confirms a state's rules (human-only)
+    bin/csr rules confirm <STATE> [--by <name>]                   compliance confirms a state's rules (human-only: a terminal)
+    bin/csr live on|off [--by <name>]                             the agency's live switch (human-only: a terminal)
+    bin/csr lock | unlock                                         OS-immutable flag on the human-only files (human-only)
     bin/csr setup validate|research                               deployment: check markets.csv; research tasks per appointed market
     bin/csr setup propose <rows.csv> | confirm <market> --by <n>  proposed appetite rows; a person confirms one market's rows
-    bin/csr ams status|preview <id> [--system s]|push <id>|export <dir>   Applied Epic (primary), HawkSoft, EZLynx
+    bin/csr ams status|test|preview <id> [--system s]|push <id>|export <dir>   Applied Epic (primary), HawkSoft, EZLynx
     bin/csr replay <dir> [--live]                                 closed tickets vs what the CSRs did: agreement report
 """
 from __future__ import annotations
@@ -167,6 +169,16 @@ def cmd_rules(a):
     return 0 if status == "ok" else 1
 
 
+def cmd_live(a):
+    print(json.dumps(orchestrator.set_live(a.state == "on", a.by), indent=2))
+    return 0
+
+
+def cmd_lock(a):
+    print(json.dumps(orchestrator.lock_files(a.cmd == "lock", a.by), indent=2))
+    return 0
+
+
 def cmd_init(a):
     print(json.dumps(agency.init(a.dir), indent=2))
     return 0
@@ -190,8 +202,8 @@ def cmd_setup(a):
     rows = markets.load_markets(a.markets)
     if a.action in ("validate", "research"):
         if rows is None:
-            print(json.dumps({"status": "needs_data", "fix": "copy data/agency/markets.example.csv to data/agency/markets.csv and list "
-                                                            "your appointed carriers and wholesalers/MGAs"}, indent=2))
+            print(json.dumps({"status": "needs_data", "fix": "list your appointed carriers and wholesalers/MGAs in "
+                                                            "<home>/agency/markets.csv (bin/csr init creates it)"}, indent=2))
             return 1
         errors = markets.validate_markets(rows)
         if a.action == "validate" or errors:
@@ -202,7 +214,7 @@ def cmd_setup(a):
         return 0
     if a.action == "propose":
         if rows is None or not a.arg:
-            raise ValueError("setup propose needs data/agency/markets.csv and a CSV of proposed rows")
+            raise ValueError("setup propose needs <home>/agency/markets.csv and a CSV of proposed rows")
         with open(a.arg, newline="", encoding="utf-8") as f:
             import csv as _csv
             r = markets.propose(list(_csv.DictReader(f)), rows, _today(None))
@@ -220,6 +232,10 @@ def cmd_ams(a):
     if a.action == "status":
         print(json.dumps(ams.connector_status(), indent=2))
         return 0
+    if a.action == "test":
+        r = ams.test()
+        print(json.dumps(r, indent=2))
+        return 0 if r["status"] == "connected" else 1
     if a.action in ("preview", "push"):
         if not a.out:
             raise ValueError(f"ams {a.action} needs a ticket id")
@@ -282,7 +298,10 @@ def main(argv=None) -> int:
     s.add_argument("state", nargs="?"); s.add_argument("--by"); s.set_defaults(fn=cmd_rules)
     s = sub.add_parser("init"); s.add_argument("dir", nargs="?"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("readiness"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_readiness)
-    s = sub.add_parser("ams"); s.add_argument("action", choices=["status", "preview", "push", "export"]); s.add_argument("out", nargs="?")
+    s = sub.add_parser("live"); s.add_argument("state", choices=["on", "off"]); s.add_argument("--by"); s.set_defaults(fn=cmd_live)
+    for name in ("lock", "unlock"):
+        s = sub.add_parser(name); s.add_argument("--by"); s.set_defaults(fn=cmd_lock)
+    s = sub.add_parser("ams"); s.add_argument("action", choices=["status", "test", "preview", "push", "export"]); s.add_argument("out", nargs="?")
     s.add_argument("--system", default="applied_epic", choices=sorted(ams.SYSTEMS)); s.set_defaults(fn=cmd_ams)
     s = sub.add_parser("setup"); s.add_argument("action", choices=["validate", "research", "propose", "confirm"]); s.add_argument("arg", nargs="?")
     s.add_argument("--by", help="the person at the agency confirming"); s.add_argument("--markets", help="markets.csv path"); s.set_defaults(fn=cmd_setup)
@@ -294,6 +313,9 @@ def main(argv=None) -> int:
     except schemas.GateError as e:
         print(json.dumps({"ok": False, "code": e.code, "detail": e.detail}), file=sys.stderr)
         return 2
-    except (ValueError, FileNotFoundError, json.JSONDecodeError) as e:
+    except (ValueError, FileNotFoundError, json.JSONDecodeError, paths.HomeNotSet) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except PermissionError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1

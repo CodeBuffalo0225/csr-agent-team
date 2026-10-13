@@ -16,12 +16,11 @@ argument-hint: "[agency home directory]"
    and for which lines and states. Write `<home>/agency/markets.csv`, then `CLI setup validate`.
 4. **Appetite research.** Run `CLI setup research`. For each task, dispatch **csr-04-market** (at most 3 at once) to
    read that market's public appetite page and propose rows. Run `CLI setup propose <file>` on what comes back.
-   Then stop: a person at the agency runs `CLI setup confirm "<market>" --by "<their name>"` in their own terminal.
-   The plugin's hook refuses that command from you, by design.
+   Then stop: a person at the agency runs `CLI setup confirm "<market>"` in their own terminal (it asks their name and
+   the market typed back). The hook refuses it from you, and the engine refuses it without a terminal.
 5. **State rules.** `CLI rules` lists the states whose rules are researched but unconfirmed. Show the compliance owner
-   the source URL on each row. They confirm with `CLI rules confirm <STATE> --by "<name>"`, again in their own
-   terminal. For a state the agency writes in that is not loaded, say so; do not supply a notice period.
+   the source URL on each row. They confirm with `CLI rules confirm <STATE>`, again in their own terminal. For a state the agency writes in that is not loaded, say so; do not supply a notice period.
 6. **AMS.** `CLI ams status` names what the vendor requires (Applied Epic: Dev Center approval and an SDK/API license;
    HawkSoft: certified partner access; EZLynx: partner/enterprise access). Nothing is configured until the agency has it.
-7. **Finish** with `CLI readiness`: show the checklist exactly as printed. The live switch stays off; the agency turns
-   it on last, in `<home>/runtime/desk.json`.
+7. **Finish** with `CLI readiness`: show the checklist exactly as printed. The live switch stays off; a person turns
+   it on last with `CLI live on` in their own terminal, and can run `CLI lock` to make the human-only files immutable.

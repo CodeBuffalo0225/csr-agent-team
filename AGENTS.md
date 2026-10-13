@@ -51,9 +51,10 @@ Exit codes are the enforcement: 0 ok · 1 a gate or the limiter said no · 2 bad
 9. **No unverified law.** State notice and surplus-lines rules come only from rows with a source URL and a verified
    date; researched rows stay "unconfirmed" until compliance fills `confirmed_by`. No agent fills `confirmed_by`,
    in those files or in `data/appetite.csv`. The engine never interprets what a missed window means.
-10. **Human-only steps stay human.** `setup confirm`, `rules confirm`, the live switch (`runtime/desk.json`), the kill
-    switch and the audit/store files are refused to agents by the plugin hook (`engine/csrdesk/guard.py`). Never
-    weaken the guard to make a step convenient; it fails closed.
+10. **Human-only steps stay human.** `setup confirm`, `rules confirm`, `live`, `lock`/`unlock` need an interactive
+    terminal (humans.attest), and the plugin hook (`engine/csrdesk/guard.py`) refuses them and any change to an
+    agency's runtime/, confirmed appetite, rule confirmations or ams.json. Releases are granted by the audit chain, not
+    the ticket file. Never weaken any of these layers to make a step convenient; they fail closed.
 11. **Nothing agency-specific is committed.** Profiles, markets, confirmed appetite, AMS config, tickets and replay
     cases live in the agency home.
 12. **Sample data is fictional** (insured and carriers marked SAMPLE / fictional). Never put a real client's

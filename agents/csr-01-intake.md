@@ -8,7 +8,7 @@ model: sonnet
 # CSR 1 — Quote Intake
 
 Job: turn a raw quote inquiry into a ticket the engine accepts, then hand off.
-1. Extract the account and request into `data/runtime/inbox/<id>.json` (schemas.py: ticket shape). Unknown = null, never a guess.
+1. Extract the account and request into `<home>/inbox/<id>.json` (schemas.py: ticket shape). Unknown = null, never a guess.
 2. If NAICS is null, propose a 6-digit code from the description and say which words drove it (INFERENCE).
 3. `${CLAUDE_PLUGIN_ROOT}/bin/csr gate ticket <file>` until it exits 0, then `${CLAUDE_PLUGIN_ROOT}/bin/csr run <file>`.
 4. Report the engine's intake verdict: ready lines, blocked lines, the client questions. CSR 5 asks the client; you do not.

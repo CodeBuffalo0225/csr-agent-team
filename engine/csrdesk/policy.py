@@ -63,6 +63,9 @@ RULES = tuple((risk, re.compile(pattern), why) for risk, pattern, why in (
      "a bulk call has a blast radius one approval should cover"),
     ("IRREVERSIBLE", r"send|reply|forward|delete|remove|merge|purge|" + _word("post") + r"|publish|execute",
      "cannot be taken back"),
+    ("IRREVERSIBLE", _word("sign|signs|dispatch|share|invite|grant|revoke|transfer|approve|deploy|trigger|run|wire|"
+                           "archive|trash|move|rename"),
+     "acts on other people or moves things out of place; a read verb elsewhere in the name does not make it a read"),
     ("IRREVERSIBLE", _word("filters?|forwarding|vacation|auto_?reply|autoreply|rules?|delegates?"),
      "standing mail rules keep acting after the session ends"),
     ("IRREVERSIBLE",
@@ -70,7 +73,7 @@ RULES = tuple((risk, re.compile(pattern), why) for risk, pattern, why in (
      r"(?=.*" + _word("create|update|respond|accept|decline|add|set|schedule|book|reschedule|move|cancel") + r")",
      "a calendar write commits the AE to a time and mails other people"),
     ("WRITE", _word("complete|skip|snooze|reopen|create|update|upsert|add|log|insert|patch|set|tag|label|unlabel|"
-                    "apply|assign|edit|modify|save|import|associate|attach|write|draft|note"),
+                    "apply|assign|edit|modify|save|import|associate|attach|write|draft|note|copy|upload|mark|flag|star|pin"),
      "changes the agency's own system of record; the plural is the noun, so list_labels is not a write"),
     ("READ", _word("get|list|search|query|find|read|describe|fetch|lookup|view|retrieve|count|show|index|"
                    "decode|geocode|summarize|analyze|research|check|validate|verify|compare|scan"),

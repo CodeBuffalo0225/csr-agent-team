@@ -112,9 +112,9 @@ class AmsAndReplay(unittest.TestCase):
         from unittest import mock
         cfgp = tmpdir() / "ams.json"
         self.assertEqual(ams.connector_status(config_path=str(cfgp))["status"], "needs_key")
-        cfgp.write_text(json.dumps({"system": "hawksoft", "base_url": "https://x.example.invalid", "token_env": "T_HS",
+        cfgp.write_text(json.dumps({"system": "hawksoft", "base_url": "https://x.example.invalid", "token_env": "CSR_DESK_T_HS",
                                     "paths": {"note": "/n"}}))
-        with mock.patch.dict(os.environ, {"T_HS": "t"}):
+        with mock.patch.dict(os.environ, {"CSR_DESK_T_HS": "t", "CSR_DESK_HOME": str(tmpdir())}):
             self.assertEqual(ams.connector_status(config_path=str(cfgp))["status"], "needs_key")      # no completed call yet
             done = [{"event": "call_ok", "vendor": "ams", "ts": "t"}]
             self.assertEqual(ams.connector_status(done, config_path=str(cfgp))["status"], "connected")

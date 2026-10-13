@@ -17,6 +17,7 @@ agency.json
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -47,9 +48,18 @@ def load_profile(path=None):
 
 
 def validate_profile(p) -> list:
-    """Problems as strings; [] means the profile is complete."""
+    """Problems as strings; [] means the profile is complete. Never raises on a malformed profile."""
     if p is None:
         return ["agency profile not found: bin/csr init, then fill <home>/agency/agency.json"]
+    if not isinstance(p, dict):
+        return ["agency.json must be a JSON object"]
+    if not isinstance(p.get("address"), dict):
+        return ["address must be an object with street, city, state, zip"]
+    if not isinstance(p.get("producer"), dict):
+        p = dict(p, producer={})
+    for k in ("states_written", "lines_written"):
+        if not isinstance(p.get(k), list):
+            p = dict(p, **{k: []})
     errors = []
     unknown = [k for k in p if k not in PROFILE_KEYS]
     if unknown:
@@ -82,8 +92,15 @@ def validate_profile(p) -> list:
 
 
 def init(home=None) -> dict:
-    """Create an agency home. Existing files are never overwritten: re-running init is safe."""
-    h = Path(home).expanduser() if home else paths.home()
+    """Create an agency home (default ./csr-desk). Existing files are never overwritten: re-running init is safe.
+    Refuses any directory inside the plugin itself."""
+    default = Path(os.environ[paths.ENV]) if os.environ.get(paths.ENV) else Path.cwd() / "csr-desk"
+    h = (Path(home).expanduser() if home else default).expanduser().resolve()
+    root = paths.ROOT.resolve()
+    if h == root or root in h.parents:
+        raise ValueError(f"{h} is inside the plugin; an agency home lives outside it (e.g. ~/CSRDesk/<agency>)")
+    if h.exists() and not h.is_dir():
+        raise ValueError(f"{h} exists and is not a directory")
     created, kept = [], []
 
     def put(rel: str, content: str):
@@ -100,7 +117,7 @@ def init(home=None) -> dict:
     put("runtime/desk.json", json.dumps({"live": False}) + "\n")
     put("replay/README.md", "Closed tickets, each with an `expected` block written from what the CSRs actually did.\n"
                             "Format: engine/csrdesk/replay.py. These hold client PII: keep this folder private.\n")
-    for d in ("runtime/tickets", "runtime/audit"):
+    for d in ("runtime/tickets", "runtime/audit", "inbox"):
         (h / d).mkdir(parents=True, exist_ok=True)
     return {"home": str(h), "created": created, "kept": kept,
             "next": [f"export {paths.ENV}={h}", "fill agency/agency.json", "list markets in agency/markets.csv",
@@ -112,9 +129,33 @@ def _item(step: str, ok: bool, detail: str, fix: str = None, required: bool = Tr
             "fix": None if ok else fix, "required": required}
 
 
+def hook_selftest() -> dict:
+    """Run the plugin's guard exactly as Claude Code would (same python3, same script) on an event it must deny.
+    If Python is missing or the hook crashes, Claude Code would run the tool unguarded; this catches that."""
+    import subprocess
+    import sys
+    script = paths.ROOT / "engine" / "hook.py"
+    event = {"tool_name": "Write", "tool_input": {"file_path": str(paths.home() / "runtime" / "desk.json")}}
+    try:
+        p = subprocess.run(["python3", str(script)], input=json.dumps(event), capture_output=True, text=True, timeout=15)
+        decision = json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"]
+        return {"ok": decision == "deny", "detail": f"guard answered {decision} to a live-switch write"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "detail": f"guard did not run: {type(e).__name__}: {e} (Claude Code would run tools unguarded)"}
+
+
 def readiness(as_of: str) -> dict:
     """Every deployment step, in the order an agency does them. READY when every required step is done."""
+    from . import market as market_mod
+    from . import orchestrator
     items = []
+    src = paths.source()
+    items.append(_item("0 agency home", src == "env",
+                       f"{paths.home()} (from ${paths.ENV})" if src == "env" else
+                       f"{paths.home()} (found from the working directory, not ${paths.ENV})",
+                       f"set {paths.ENV} for every workstation so the engine and the hook always agree on the home"))
+    hk = hook_selftest()
+    items.append(_item("0 safety hook", hk["ok"], hk["detail"], "install Python 3.9+ as python3 on PATH; reinstall the plugin"))
     prof = load_profile()
     perrs = validate_profile(prof)
     items.append(_item("1 agency profile", not perrs, "complete" if not perrs else "; ".join(perrs),
@@ -126,20 +167,36 @@ def readiness(as_of: str) -> dict:
     items.append(_item("2 markets (carriers + wholesalers/MGAs)", ok,
                        f"{len(appt)} appointed market(s)" if ok else "; ".join(merrs or ["no appointed markets"]),
                        "list appointed carriers and wholesalers/MGAs in <home>/agency/markets.csv; bin/csr setup validate"))
-    from . import market as market_mod
+    v = market_mod.validate_appetite(None, as_of)
     rows = market_mod.load_appetite() or []
-    confirmed = {r["carrier"].strip() for r in rows if (r.get("confirmed_by") or "").strip()}
+    usable = [r for r in rows if (r.get("confirmed_by") or "").strip()]
+    states = [s for s in ((prof or {}).get("states_written") or []) if isinstance(s, str)]
+    lines = [l for l in ((prof or {}).get("lines_written") or []) if isinstance(l, str)]
+    confirmed = {r["carrier"].strip() for r in usable}
     pending = sorted(n for n, r in appt.items() if r["kind"].strip() == "carrier" and n not in confirmed)
-    items.append(_item("3 confirmed appetite", bool(appt) and not pending,
-                       f"{len(confirmed)} market(s) with confirmed appetite" + (f"; awaiting: {', '.join(pending)}" if pending else ""),
-                       "bin/csr setup research -> the csr-04-market agent proposes -> a person runs bin/csr setup confirm"))
-    states = (prof or {}).get("states_written") or []
-    lines = (prof or {}).get("lines_written") or []
+    uncovered = []
+    for st in states:
+        for ln in lines:
+            admitted_rows = [r for r in usable if r["line"].strip() == ln and
+                             ("*" in r["states"] or st in [x.strip() for x in r["states"].split("|")]) and r["carrier"].strip() in appt]
+            wholesale = [n for n, r in appt.items() if r["kind"].strip() in ("wholesaler", "mga") and markets.writes(r, ln, st)]
+            if not admitted_rows and not wholesale:
+                uncovered.append(f"{st}/{ln}")
+    ok = bool(appt) and v["ok"] and not v["warnings"] and not pending and not uncovered
+    detail = "; ".join(filter(None, [
+        f"{len(confirmed)} market(s) with confirmed appetite",
+        f"appetite file invalid: {'; '.join(v['errors'][:3])}" if not v["ok"] else "",
+        f"stale rows: {len(v['warnings'])}" if v["warnings"] else "",
+        f"awaiting confirmation: {', '.join(pending)}" if pending else "",
+        f"no market for: {', '.join(uncovered)}" if uncovered else ""]))
+    items.append(_item("3 confirmed appetite", ok, detail,
+                       "bin/csr setup research -> the csr-04-market agent proposes -> a person runs bin/csr setup confirm; "
+                       "cover every state and line written with an admitted market or a wholesaler"))
     gaps, unconf = [], []
     for st in states:
         for ln in lines:
             r = staterules.rule_for(st, ln, as_of)
-            if r["status"] == "needs_data" or r["status"] == "stale":
+            if r["status"] in ("needs_data", "stale"):
                 gaps.append(f"{st}/{ln}")
             elif r["status"] == "unconfirmed":
                 unconf.append(f"{st}/{ln}")
@@ -151,38 +208,48 @@ def readiness(as_of: str) -> dict:
     rules_ok = bool(states and lines) and not gaps and not unconf
     detail = ("all confirmed" if rules_ok else
               "; ".join(filter(None, [f"not loaded: {', '.join(sorted(set(gaps)))}" if gaps else "",
-                                      f"researched, awaiting compliance: {', '.join(sorted(set(unconf)))}" if unconf else "",
+                                      f"awaiting compliance: {', '.join(sorted(set(unconf)))}" if unconf else "",
                                       "" if states and lines else "states_written / lines_written not set"])))
     items.append(_item("4 state notice + surplus lines rules", rules_ok, detail,
-                       "compliance checks each row against its source_url, then runs bin/csr rules confirm <STATE> --by <name> "
-                       "in their own terminal; states not loaded need rows added with source + verified date"))
+                       "compliance checks each row against its source_url, then runs bin/csr rules confirm <STATE> at a "
+                       "terminal; states not loaded need rows added to <home>/state_rules.csv with source + verified date"))
     system = (prof or {}).get("ams_system")
     if system == "none":
         items.append(_item("5 AMS", True, "no AMS: masked export (bin/csr ams export) is the bridge"))
     else:
         st = ams.connector_status()
-        items.append(_item("5 AMS", st["status"] == "connected",
+        mismatch = st["system"] and system and st["system"] != system
+        items.append(_item("5 AMS", st["status"] == "connected" and not mismatch,
                            f"{ams.SYSTEMS.get(system, {}).get('label', system)}: {st['status']}"
-                           + (f"; missing {', '.join(st['missing'])}" if st["missing"] else ""),
-                           "obtain vendor API access (" + "; ".join(st["requires"]) + "), then <home>/agency/ams.json + token env var"))
+                           + (f"; ams.json says {st['system']}, the profile says {system}" if mismatch else "")
+                           + (f"; missing {', '.join(st['missing'])}" if st["missing"] else
+                              ("; configured, no completed call yet (bin/csr ams test, or push one ticket)" if st["status"] != "connected" else "")),
+                           "obtain vendor API access (" + "; ".join(st["requires"]) + "), then <home>/agency/ams.json + "
+                           f"{ams.TOKEN_PREFIX}* token env var, then bin/csr ams test"))
+    rep, distinct = None, 0
     cases = sorted(paths.replay_dir().glob("*.json")) if paths.replay_dir().exists() else []
-    rep = None
     if cases:
         try:
             rep = replay.run_dir(paths.replay_dir())
-        except ValueError as e:
-            rep = {"cases": len(cases), "agree": 0, "error": str(e)}
-    ok = bool(rep) and rep.get("cases", 0) >= REPLAY_TARGET and rep.get("disagree", 1) == 0
+            from . import audit as audit_mod
+            seen = set()
+            for f in cases:
+                c = json.loads(f.read_text(encoding="utf-8"))
+                seen.add(audit_mod.digest({k: v for k, v in c.items() if k not in ("ticket_id",)}))
+            distinct = len(seen)
+        except (ValueError, json.JSONDecodeError) as e:
+            rep = {"cases": len(cases), "agree": 0, "disagree": len(cases), "error": str(e)}
+    ok = bool(rep) and distinct >= REPLAY_TARGET and rep.get("disagree", 1) == 0
     items.append(_item("6 replay closed tickets", ok,
-                       f"{rep['agree']}/{rep['cases']} agree (target {REPLAY_TARGET})" if rep else f"0 of {REPLAY_TARGET} cases",
-                       f"put {REPLAY_TARGET} closed tickets with expected blocks in <home>/replay/; bin/csr replay <home>/replay"))
+                       (f"{rep['agree']}/{rep['cases']} agree, {distinct} distinct (target {REPLAY_TARGET})" if rep
+                        else f"0 of {REPLAY_TARGET} cases"),
+                       f"put {REPLAY_TARGET} different closed tickets with expected blocks in <home>/replay/; bin/csr replay <home>/replay"))
     ks = (paths.runtime() / "STOP").exists()
     items.append(_item("kill switch", not ks, "clear" if not ks else "STOP file present: every ticket halts",
-                       "remove <home>/runtime/STOP when the agency means to resume", required=True))
-    from . import orchestrator
+                       "remove <home>/runtime/STOP when the agency means to resume"))
     live = orchestrator.agency_live()
     items.append(_item("live switch", live, "live: releases and AMS writes allowed with approvals" if live else
-                       "drafts only (the agency turns this on last, in <home>/runtime/desk.json)", required=False))
+                       "drafts only (a person turns it on last: bin/csr live on)", required=False))
     todo = [i for i in items if i["required"] and i["status"] != "done"]
     return {"home": str(paths.home()), "verdict": "READY" if not todo else "NOT READY", "todo": len(todo), "items": items}
 

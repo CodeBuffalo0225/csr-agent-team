@@ -12,8 +12,9 @@ the statute or bulletin URL and the date someone verified it.
     surplus_rule(state, as_of)    -> diligent-effort declinations before a surplus lines placement, same statuses
 
 The NJ and NY rows shipped in data/state_rules.csv and data/surplus_lines_rules.csv were researched from the
-regulation and statute text on 2026-10-13 (sources in each row). They carry an empty `confirmed_by` until the
-agency's compliance owner checks them; until then every packet labels them unconfirmed.
+regulation and statute text on 2026-10-13 (sources in each row). They stay "unconfirmed" until the agency's
+compliance owner checks them and runs `bin/csr rules confirm <STATE>` at a terminal; the `confirmed_by` column in a
+rules file is not trusted (anyone can type a name); only <home>/rule_confirmations.csv, bound to a digest, counts.
 
 CSR 6 attaches the result to every renewal, so the AE sees the configured notice windows next to the
 days left, or sees plainly that they are not loaded. The desk never interprets what a missed window means.
@@ -36,14 +37,48 @@ RULES_MAX_AGE_DAYS = 365          # a rule verified longer ago than this is re-v
 DAY_FIELDS = ("nonrenewal_notice_days", "cancel_nonpay_notice_days", "cancel_other_notice_days")
 
 
-def load(path=None, name: str = NOTICE_FILE) -> list:
-    p = Path(path).expanduser() if path else paths.rules_file(name)
-    if not p.is_absolute():
-        p = paths.home() / p
+KEYS = {NOTICE_FILE: ("state", "line"), SURPLUS_FILE: ("state",)}
+CONFIRMATIONS = "rule_confirmations.csv"
+CONFIRM_COLUMNS = ("state", "confirmed_by", "confirmed_on", "digest")
+
+
+def _read(p: Path) -> list:
     if not p.exists():
         return []
     with p.open(newline="", encoding="utf-8") as f:
         return [r for r in csv.DictReader(f) if (r.get("state") or "").strip()]
+
+
+def load(path=None, name: str = NOTICE_FILE) -> list:
+    """With `path`, that file. Otherwise the shipped researched rows, overlaid by the agency's own rows from
+    <home>/<name> (an agency row replaces the shipped row for the same state and line). Shipped files are never
+    edited, so a plugin update reaches every agency; a changed row voids its state's confirmation (see confirm)."""
+    if path:
+        p = Path(path).expanduser()
+        return _read(p if p.is_absolute() else paths.home() / p)
+    rows = {tuple(r[k].strip() for k in KEYS[name]): r for r in _read(paths.SHIPPED / name)}
+    own = paths.home() / name
+    if own.resolve() != (paths.SHIPPED / name).resolve():
+        for r in _read(own):
+            rows[tuple(r[k].strip() for k in KEYS[name])] = dict(r, _origin="agency")
+    return list(rows.values())
+
+
+def state_digest(state: str) -> str:
+    """What a confirmation is bound to: every notice and surplus row for the state, minus bookkeeping columns."""
+    import hashlib
+    import json
+    body = []
+    for name in (NOTICE_FILE, SURPLUS_FILE):
+        for r in load(None, name):
+            if r["state"].strip() == state:
+                body.append({k: (v or "").strip() for k, v in sorted(r.items()) if k not in ("confirmed_by", "_origin")})
+    body.sort(key=lambda r: json.dumps(r, sort_keys=True))
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
+def confirmations() -> dict:
+    return {r["state"].strip(): r for r in _read(paths.home() / CONFIRMATIONS)}
 
 
 def validate(rows: list, as_of: str) -> list:
@@ -82,14 +117,23 @@ def rule_for(state: str, line: str, as_of: str, rows: list = None) -> dict:
     row = next((r for r in good if r["line"].strip() == line), None) or next((r for r in good if r["line"].strip() == "*"), None)
     if row is None:
         return {"status": "needs_data", "value": None,
-                "why": f"no verified {state} notice rule for {line} in data/state_rules.csv; compliance loads it"}
+                "why": f"no verified {state} notice rule for {line}; compliance adds it to <home>/state_rules.csv with its source"}
     value = {k: int(row[k]) if (row.get(k) or "").strip() else None for k in DAY_FIELDS}
     return _status(row, as_of, value)
 
 
+def _confirmed_by(state: str):
+    """The person who confirmed this state's rules, if the rules are still exactly what they confirmed."""
+    c = confirmations().get(state)
+    if c and c.get("digest") == state_digest(state):
+        return c["confirmed_by"].strip()
+    return None
+
+
 def _status(row: dict, as_of: str, value: dict) -> dict:
     age = scoring.age_days(row["verified"].strip(), as_of)
-    confirmed = (row.get("confirmed_by") or "").strip()
+    confirmed = _confirmed_by(row["state"].strip())
+    changed = row["state"].strip() in confirmations() and not confirmed
     status = "stale" if age > RULES_MAX_AGE_DAYS else ("ok" if confirmed else "unconfirmed")
     out = {"status": status, "value": value, "confirmed_by": confirmed or None,
            "evidence": {"status": "VERIFIED", "url": row["source_url"].strip(), "observed": row["verified"].strip()},
@@ -97,33 +141,34 @@ def _status(row: dict, as_of: str, value: dict) -> dict:
     if status == "stale":
         out["why"] = f"verified {row['verified']}, more than {RULES_MAX_AGE_DAYS} days ago: re-verify"
     elif status == "unconfirmed":
-        out["why"] = f"{row['state']} rule read from {row['source_url'].strip()} on {row['verified']}; compliance has not confirmed it"
+        out["why"] = (f"{row['state']} rules changed since compliance confirmed them; re-confirm" if changed else
+                      f"{row['state']} rule read from {row['source_url'].strip()} on {row['verified']}; compliance has not confirmed it")
     return out
 
 
-def confirm(state: str, by: str) -> dict:
-    """Compliance confirms one state's rows: they are written, with confirmed_by, into the agency's own copy at
-    <home>/state_rules.csv and <home>/surplus_lines_rules.csv (the shipped files are never edited). A human act:
-    the plugin hook refuses this command from an agent; compliance runs it in their own terminal."""
-    if not (by or "").strip():
-        raise ValueError("rules confirm needs --by <the compliance owner confirming>")
-    out = {}
-    for name in (NOTICE_FILE, SURPLUS_FILE):
-        rows = load(None, name)
-        mine = [r for r in rows if r["state"].strip() == state]
-        for r in mine:
-            r["confirmed_by"] = by.strip()
-        if rows:
-            dest = paths.home() / name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with dest.open("w", newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, list(rows[0].keys()))
-                w.writeheader()
-                w.writerows(rows)
-        out[name] = len(mine)
-    if not any(out.values()):
+def confirm(state: str, by: str = None, *, attest=None, today: str = None) -> dict:
+    """Compliance confirms one state's notice and surplus lines rules, as they stand right now. Recorded in
+    <home>/rule_confirmations.csv with a digest of the exact rows; if a row later changes (a plugin update, an
+    agency edit) the confirmation stops applying and the packet says to re-confirm. Human-only: needs an
+    interactive terminal and the state typed back (humans.attest)."""
+    import datetime as _dt
+    from . import humans
+    state = (state or "").strip().upper()
+    n = sum(1 for name in (NOTICE_FILE, SURPLUS_FILE) for r in load(None, name) if r["state"].strip() == state)
+    if not n:
         raise ValueError(f"no rows for {state}: add them (with source_url and verified) before confirming")
-    return {"state": state, "by": by.strip(), "confirmed_rows": out}
+    who = (attest or humans.attest)(f"Confirm {state} notice and surplus lines rules ({n} rows, each against its source_url)",
+                                    state, by)
+    rows = [r for r in _read(paths.home() / CONFIRMATIONS) if r["state"].strip() != state]
+    rows.append({"state": state, "confirmed_by": who, "confirmed_on": today or _dt.date.today().isoformat(),
+                 "digest": state_digest(state)})
+    dest = paths.home() / CONFIRMATIONS
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, CONFIRM_COLUMNS)
+        w.writeheader()
+        w.writerows(rows)
+    return {"state": state, "by": who, "rows": n}
 
 
 def surplus_rule(state: str, as_of: str, rows: list = None) -> dict:
@@ -139,4 +184,4 @@ def surplus_rule(state: str, as_of: str, rows: list = None) -> dict:
             continue
         return _status(r, as_of, {"declinations_required": n, "export_list": (r.get("export_list") or "").strip()})
     return {"status": "needs_data", "value": None,
-            "why": f"no verified {state} surplus lines diligent-effort rule in data/surplus_lines_rules.csv"}
+            "why": f"no verified {state} surplus lines diligent-effort rule; compliance adds it to <home>/surplus_lines_rules.csv"}

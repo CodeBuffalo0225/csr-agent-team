@@ -1,13 +1,13 @@
 {
-  "description": "csr-desk safety: ask a human before any irreversible connector call (send, bind, issue, submit, file, pay); ask before AMS writes while the desk is not live; refuse agent edits to the human-only files (live switch, confirmed appetite, confirmed rules, audit, store, pepper) and the human-only commands (setup confirm, rules confirm). Fails closed.",
+  "description": "csr-desk safety: ask a person before any irreversible connector call; ask before AMS writes while not live; refuse agent changes to the human-only files and steps. Fails closed, including when Python cannot start.",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__.*|Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/engine/hook.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/engine/hook.py\" || { echo 'csr-desk guard could not run (is Python 3.9+ on PATH?): blocking this call' >&2; exit 2; }",
             "timeout": 15
           }
         ]

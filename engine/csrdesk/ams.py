@@ -53,8 +53,30 @@ def load_config(path=None) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def connector_status(call_log: list = None, config_path=None) -> dict:
-    """{status, system, missing, supported}. connected only after a completed call (spine S6)."""
+TOKEN_PREFIX = "CSR_DESK_"          # the token variable must be named for the desk, so ams.json cannot aim at any other secret
+
+
+def _calls_path() -> Path:
+    return paths.runtime() / "ams_calls.jsonl"
+
+
+def call_log() -> list:
+    p = _calls_path()
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def _log_call(entry: dict) -> None:
+    p = _calls_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def connector_status(call_log_entries: list = None, config_path=None) -> dict:
+    """{status, system, missing, supported}. connected only after a completed call (spine S6), read from
+    <home>/runtime/ams_calls.jsonl unless a log is given."""
     cfg = load_config(config_path)
     missing = []
     if cfg is None:
@@ -65,11 +87,18 @@ def connector_status(call_log: list = None, config_path=None) -> dict:
         for k in ("base_url", "token_env"):
             if not cfg.get(k):
                 missing.append(k)
+        if cfg.get("base_url") and not str(cfg["base_url"]).startswith("https://"):
+            missing.append("base_url must be https://")
+        if cfg.get("token_env") and not str(cfg["token_env"]).startswith(TOKEN_PREFIX):
+            missing.append(f"token_env must be named {TOKEN_PREFIX}* (e.g. {TOKEN_PREFIX}EPIC_TOKEN)")
         if not (cfg.get("paths") or {}).get("note"):
             missing.append("paths.note")
         if cfg.get("token_env") and not os.environ.get(cfg["token_env"]):
             missing.append(f"environment variable {cfg['token_env']} (the token itself never goes in a file)")
-    state = policy.vendor_readiness(call_log or [], "ams")
+    entries = call_log() if call_log_entries is None else call_log_entries
+    if cfg and cfg.get("system"):
+        entries = [e for e in entries if e.get("system") in (None, cfg["system"])]
+    state = policy.vendor_readiness(entries, "ams")
     system = (cfg or {}).get("system")
     return {"status": "needs_key" if missing else state["status"], "value": None if missing else state["value"],
             "system": system, "missing": missing,
@@ -124,12 +153,19 @@ def _http(url: str, payload: dict, token: str) -> dict:
 def push(run: dict, *, live: bool, config_path=None, transport=_http) -> dict:
     """Write the ticket note (and client upsert when paths.client is set) to the configured AMS. Every call goes
     through policy.decide; a call the gate denies is not made. Returns per-call results."""
+    from . import audit as audit_mod
+    if (paths.runtime() / "STOP").exists():
+        return {"status": "halted", "code": "KILL_SWITCH", "results": []}
     st = connector_status(config_path=config_path)
     if st["missing"]:
         return {"status": "needs_key", "value": None, "missing": st["missing"]}
     cfg = load_config(config_path)
     sysdef, token = SYSTEMS[cfg["system"]], os.environ[cfg["token_env"]]
     body = preview(run, cfg["system"])
+    digest = audit_mod.digest(body)
+    if any(e.get("ticket_id") == run["ticket_id"] and e.get("digest") == digest and e.get("event") == "call_ok"
+           and e.get("call") == "note" for e in call_log()):
+        return {"status": "already_pushed", "results": []}
     calls = [("note", sysdef["note_tool"], body[sysdef["note_name"]])]
     if (cfg.get("paths") or {}).get("client"):
         calls.insert(0, ("client", sysdef["client_tool"], body["client"]))
@@ -143,9 +179,46 @@ def push(run: dict, *, live: bool, config_path=None, transport=_http) -> dict:
         try:
             out = transport(cfg["base_url"].rstrip("/") + cfg["paths"][kind], payload, token)
             results.append({"call": kind, "tool": tool, "risk": risk, "decision": "allow", **out})
+            _log_call({"event": "call_ok", "vendor": "ams", "system": cfg["system"], "ticket_id": run["ticket_id"],
+                       "call": kind, "digest": digest, "ts": _now()})
         except Exception as e:
             results.append({"call": kind, "tool": tool, "risk": risk, "decision": "allow", "error": f"{type(e).__name__}: {e}"})
+    try:
+        log = audit_mod.AuditLog(paths.runtime() / "audit" / f"{run['ticket_id']}.jsonl")
+        log.append({"ticket_id": run["ticket_id"], "event": "ams_push", "system": cfg["system"], "digest": digest,
+                    "results": [{k: r.get(k) for k in ("call", "decision", "code", "http_status", "error")} for r in results]})
+    except OSError:
+        pass
     return {"status": "pushed" if all("http_status" in r for r in results) else "partial_or_denied", "results": results}
+
+
+def _now() -> str:
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def test(config_path=None, transport=None) -> dict:
+    """One read call (GET paths.health) to prove the configured credentials work; logged as call_ok on success.
+    Without paths.health, the first successful push is what proves the connection."""
+    st = connector_status(config_path=config_path)
+    cfg = load_config(config_path)
+    if st["missing"]:
+        return {"status": "needs_key", "missing": st["missing"]}
+    health = (cfg.get("paths") or {}).get("health")
+    if not health:
+        return {"status": "no_health_path", "fix": "add paths.health (a read endpoint your access grants), or push one ticket"}
+    url = cfg["base_url"].rstrip("/") + health
+
+    def _get(u, token):
+        req = urllib.request.Request(u, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return {"http_status": r.status}
+    try:
+        out = (transport or _get)(url, os.environ[cfg["token_env"]])
+    except Exception as e:
+        return {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+    _log_call({"event": "call_ok", "vendor": "ams", "system": cfg["system"], "call": "health", "ts": _now()})
+    return {"status": "connected", **out}
 
 
 def export(store, out_dir) -> dict:

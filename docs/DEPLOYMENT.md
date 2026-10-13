@@ -19,7 +19,9 @@ The repository is private, so the installing account needs read access. The plug
   submit, file a claim, pay, or pull an MVR. It also asks before AMS writes while the desk isn't live, refuses
   agent edits to the human-only files, and fails closed.
 
-No Python packages are needed beyond Python 3.9+.
+**Prerequisite:** Python 3.9+ on PATH as `python3`, on every workstation; no packages beyond that. The hook is a
+Python script. If it can't start, the hook blocks every tool call (exit 2) rather than letting tools run unguarded,
+and `bin/csr readiness` runs the real hook as a self-test.
 
 ## 1. Create the agency home
 
@@ -57,7 +59,7 @@ Then build the appetite file. The agent researches and proposes; a person confir
 bin/csr setup validate
 bin/csr setup research > research.json       # one task per appointed market for the csr-04-market agent
 bin/csr setup propose proposed.csv            # schema-checked; parked in agency/appetite.proposed.csv, NOT live
-bin/csr setup confirm "Market" --by "Name"    # a person, in their own terminal (the hook refuses it from an agent)
+bin/csr setup confirm "Market"                # a person, in their own terminal: it asks their name and the market typed back
 ```
 
 CSR 4 uses only confirmed rows from appointed markets, and admitted carriers come first. When no admitted market
@@ -68,8 +70,10 @@ the state's surplus-lines declination rule attached.
 
 The plugin ships **NJ, NY and CT** notice periods and **NJ, NY and PA** surplus-lines rules, read from the primary
 text on 2026-10-13. Every row is cited and every row is *unconfirmed* until the agency's compliance owner checks it
-against its source and runs `bin/csr rules confirm <STATE> --by "<name>"`. That writes the agency's own confirmed
-copy into its home; the shipped files are never edited.
+against its source and runs `bin/csr rules confirm <STATE>` in their own terminal. The confirmation is recorded in
+`<home>/rule_confirmations.csv`, bound to a digest of the exact rows. If a plugin update or an agency edit changes
+a row, the sign-off lapses and the packet says to re-confirm. Shipped files are never edited, so corrections reach
+every agency. A state the agency adds goes in `<home>/state_rules.csv`, with its source and verified date.
 
 | | New Jersey | New York | Connecticut |
 |---|---|---|---|
@@ -108,14 +112,46 @@ Applied Epic is the primary target, with HawkSoft and EZLynx alongside. All thre
 - **EZLynx:** partner/enterprise access ([partners](https://www.ezlynx.com/partners/automation)).
 
 None publishes an endpoint reference, so the desk invents none. Once access is granted, `agency/ams.json` holds
-the base URL, the approved paths and the name of the token's environment variable (never the token itself), and
-`bin/csr ams push <ticket>` writes the ticket note and the client record. With `ams_system: none`, `bin/csr ams export`
+the https base URL, the approved paths (optionally `paths.health`, a read endpoint) and the name of the token's
+environment variable, which must start with `CSR_DESK_`. The token itself is never in the file.
+- `bin/csr ams test` proves the credentials with one read call.
+- `bin/csr ams push <ticket>` writes the ticket note and the client record. It's logged, idempotent, and stopped
+  by the kill switch. With `ams_system: none`, `bin/csr ams export`
 writes masked import files instead.
 
-## 6. Measure, then turn it on
+## 6. Security model: what protects the human-only steps
+
+A person, not an agent, does these four things:
+- confirms a market's appetite;
+- confirms a state's rules;
+- turns the desk live;
+- locks the protected files.
+
+Four layers, each assuming the one before it can fail:
+
+1. **Terminal attestation, in the engine.** `setup confirm`, `rules confirm`, `live on|off` and `lock|unlock` need an
+   interactive terminal and the person typing the market, state or word shown. Claude Code's Bash tool has no
+   terminal, so an agent running the identical command is refused. These steps are run in the person's own terminal.
+2. **The plugin hook** (`engine/csrdesk/guard.py`, on every tool):
+   - It refuses the human-only subcommands in any argument order or quoting.
+   - It refuses any command or file write that touches an agency's `runtime/` (live switch, kill switch, tickets,
+     audit, store, pepper), the confirmed appetite, the rule confirmations or `ams.json`. Paths are normalized,
+     symlinks resolved and case folded.
+   - It asks a person before every irreversible connector call.
+3. **The audit chain decides releases.** A draft is releasable only if the hash-chained audit log recorded the AE's
+   APPROVE of that exact content. Editing a ticket file grants nothing.
+4. **The OS.** `bin/csr lock` sets the user-immutable flag on the human-only files where the OS supports it (macOS).
+   Elsewhere, have IT make them read-only to the account Claude Code runs as.
+
+What no hook can do is fully contain an agent that has a shell: Python can build a path at runtime. That's why
+layers 1, 3 and 4 exist, and why the AMS token must live in a `CSR_DESK_*` environment variable on an https
+endpoint.
+
+## 7. Measure, then turn it on
 
 - **Replay first.** Put about 20 closed tickets in `<home>/replay/`, each with an `expected` block written from
   what the CSRs actually did, and run `bin/csr replay <home>/replay`. Readiness requires all of them to agree.
-- **Turn it on last.** `<home>/runtime/desk.json` → `{"live": true}` is the agency's switch. Until then every
-  release and AMS write is a dry run.
-- **Stop it any time.** `<home>/runtime/STOP` halts every ticket before its next step.
+- **Turn it on last.** A person runs `bin/csr live on` in their own terminal. Until then every release and AMS
+  write is a dry run.
+- **Stop it any time.** `<home>/runtime/STOP` halts every ticket before its next step, and refuses every release
+  and AMS push.

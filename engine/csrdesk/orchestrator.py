@@ -14,6 +14,7 @@ any step may end in HALTED, which only a human closes.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from . import (paths, acord, audit, claimsdesk, decpages, exclusions, grounding, intake, lossruns, market, packet,
@@ -90,10 +91,10 @@ def draft_digest(d: dict) -> str:
 
 def agency_live(config: dict = None) -> bool:
     """`live` is the agency's switch, set in <home>/runtime/desk.json ({"live": true}); never a CLI flag."""
-    p = Path((config or {}).get("desk_config") or paths.runtime() / "desk.json")
     try:
+        p = Path((config or {}).get("desk_config") or paths.runtime() / "desk.json")
         return json.loads(p.read_text(encoding="utf-8")).get("live") is True
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (FileNotFoundError, json.JSONDecodeError, paths.HomeNotSet, OSError):
         return False
 
 
@@ -184,7 +185,7 @@ def decide(run: dict, decision: dict, *, as_of: str, now, config: dict = None, f
     run["approvals"] = sorted(grants)
     run["approved"] = {scope: draft_digest(drafts[scope]) for scope in grants}
     _append(run, log, {"ticket_id": run["ticket_id"], "event": "ae_decision", "decision": kind,
-                       "target": decision.get("target"), "approvals": grants})
+                       "target": decision.get("target"), "approvals": grants, "approved": run["approved"]})
     if kind != "REVISE":
         run["status"] = {"APPROVE": "CLOSED_APPROVED", "REJECT": "CLOSED_REJECTED", "ESCALATE": "ESCALATED"}[kind]
         run["steps"][routing.RECORD] = _record(run, as_of, config)       # CSR 8 records the decision's status
@@ -245,15 +246,72 @@ def release(run: dict, index: int, *, live: bool = False, harness: bool = False,
     risk = policy.classify(d["release_tool"])["risk"]
     target = f"{run['ticket_id']}/{index}"
     scope = f"{d['release_tool']}:{target}"
-    if run["status"] != "CLOSED_APPROVED" and risk != "READ":
+    stop = Path(config["kill_switch"]) if (config or {}).get("kill_switch") else paths.runtime() / "STOP"
+    if stop.exists():
+        verdict = {"decision": "deny", "code": "KILL_SWITCH"}
+    elif run["status"] != "CLOSED_APPROVED" and risk != "READ":
         verdict = {"decision": "deny", "code": "NOT_APPROVED"}
     else:
-        valid = [a for a in run["approvals"] if run.get("approved", {}).get(a) == draft_digest(d)]
-        verdict = policy.decide(d["release_tool"], target, risk, live=live, approvals=valid,
-                                content_ok=d["gate"]["ok"], harness=harness)
+        recorded = _audited_approvals(run, config)
+        if recorded is None:
+            verdict = {"decision": "deny", "code": "AUDIT_UNVERIFIED"}
+        else:
+            # an approval counts only if the audit chain recorded the AE's APPROVE of this exact content
+            valid = [a for a, dg in recorded.items() if dg == draft_digest(d)]
+            verdict = policy.decide(d["release_tool"], target, risk, live=live, approvals=valid,
+                                    content_ok=d["gate"]["ok"], harness=harness)
     _append(run, _log(config or {}, run), {"ticket_id": run["ticket_id"], "event": "release_check", "draft": index,
                                            "tool": d["release_tool"], "scope": scope, **verdict})
     return {"draft": index, "tool": d["release_tool"], "scope_needed": f"{d['release_tool']}:{target}", "risk": risk, **verdict}
+
+
+def _audited_approvals(run: dict, config: dict = None):
+    """{scope: digest} from the last APPROVE in the ticket's audit chain, or None if the chain is broken or the
+    last AE decision recorded there is not an APPROVE. The ticket file is not trusted for this: it is plain JSON."""
+    log = _log(config or {}, run)
+    if not log.verify()["ok"] or not log.path.exists():
+        return None
+    decisions = [json.loads(l) for l in log.path.read_text(encoding="utf-8").splitlines()]
+    decisions = [e for e in decisions if e.get("event") == "ae_decision"]
+    if not decisions or decisions[-1].get("decision") != "APPROVE":
+        return None
+    return dict(decisions[-1].get("approved") or {})
+
+
+def set_live(on: bool, by: str = None, *, attest=None, config: dict = None) -> dict:
+    """Turn the agency's desk live or back to drafts-only. Human-only (humans.attest)."""
+    import datetime as _dt
+    from . import humans
+    word = "LIVE" if on else "DRAFTS"
+    who = (attest or humans.attest)(f"Set this agency's desk to {'live' if on else 'drafts only'}", word, by)
+    p = Path((config or {}).get("desk_config") or paths.runtime() / "desk.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"live": bool(on), "set_by": who,
+                             "set_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}) + "\n")
+    return {"live": bool(on), "by": who, "file": str(p)}
+
+
+LOCKABLE = ("runtime/desk.json", "appetite.csv", "rule_confirmations.csv", "agency/ams.json", "runtime/pepper")
+
+
+def lock_files(lock: bool, by: str = None, *, attest=None) -> dict:
+    """Set (or clear) the OS user-immutable flag on the human-only files, where the OS supports it (macOS/BSD
+    chflags). Human-only. While locked, even the desk's own confirm/live commands fail until a person unlocks."""
+    import stat
+    from . import humans
+    who = (attest or humans.attest)(f"{'Lock' if lock else 'Unlock'} this agency's protected desk files",
+                                    "LOCK" if lock else "UNLOCK", by)
+    if not hasattr(os, "chflags"):
+        return {"status": "unsupported", "by": who,
+                "fix": "this OS has no user-immutable flag via Python; protect the files with OS permissions (docs/DEPLOYMENT.md)"}
+    done = []
+    for rel in LOCKABLE:
+        f = paths.home() / rel
+        if f.exists():
+            flags = os.stat(f).st_flags
+            os.chflags(f, (flags | stat.UF_IMMUTABLE) if lock else (flags & ~stat.UF_IMMUTABLE))
+            done.append(rel)
+    return {"status": "locked" if lock else "unlocked", "by": who, "files": done}
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────

@@ -49,13 +49,15 @@ def onboard(h: Path, replay_cases: int = agency.REPLAY_TARGET):
     with (h / "appetite.csv").open("w", newline="") as f:
         w = csv.DictWriter(f, market.APPETITE_COLUMNS)
         w.writeheader()
-        w.writerow({"carrier": "Admitted Co (fictional)", "line": "GL", "states": "NJ", "naics_prefixes": "5617", "am_best": "A",
-                    "appetite_url": "https://example.com/a", "observed": "2026-09-01", "confirmed_by": "Ops Manager"})
+        for line in ("GL", "AUTO"):
+            w.writerow({"carrier": "Admitted Co (fictional)", "line": line, "states": "NJ|NY", "naics_prefixes": "5617", "am_best": "A",
+                        "appetite_url": "https://example.com/a", "observed": "2026-09-01", "confirmed_by": "Ops Manager"})
     for st in ("NJ", "NY"):
-        staterules.confirm(st, "Lee Compliance")
+        staterules.confirm(st, "Lee Compliance", attest=lambda action, expected, by=None: by or "Test Person")
     src = json.loads((ROOT / "data" / "replay" / "05_claim.json").read_text())
     for i in range(replay_cases):
-        (h / "replay" / f"case_{i:02d}.json").write_text(json.dumps(dict(src, ticket_id=f"L-R{i:02d}")))
+        case = dict(src, ticket_id=f"L-R{i:02d}", request=dict(src["request"], description=src["request"]["description"] + f" (case {i})"))
+        (h / "replay" / f"case_{i:02d}.json").write_text(json.dumps(case))
 
 
 class FreshAgency(unittest.TestCase):
@@ -84,6 +86,21 @@ class FreshAgency(unittest.TestCase):
             onboard(h)
             r = agency.readiness(AS_OF)
             self.assertEqual(r["verdict"], "READY", [i for i in r["items"] if i["status"] == "todo"])
+
+    def test_padded_replay_and_uncovered_lines_block_ready(self):
+        with Home() as h:
+            agency.init()
+            onboard(h)
+            src = json.loads((h / "replay" / "case_00.json").read_text())
+            for f in (h / "replay").glob("case_*.json"):
+                f.write_text(json.dumps(dict(src, ticket_id=f.stem)))          # 20 files, one case
+            prof = json.loads((h / "agency" / "agency.json").read_text())
+            prof["lines_written"] = ["GL", "AUTO", "WC"]                         # WC: no market, no rule
+            (h / "agency" / "agency.json").write_text(json.dumps(prof))
+            todo = {i["step"]: i["detail"] for i in agency.readiness(AS_OF)["items"] if i["status"] == "todo"}
+            self.assertIn("1 distinct", todo["6 replay closed tickets"])
+            self.assertIn("NJ/WC", todo["3 confirmed appetite"])
+            self.assertIn("NJ/WC", todo["4 state notice + surplus lines rules"])
 
     def test_unconfirmed_rules_or_short_replay_block_ready(self):
         with Home() as h:
@@ -118,11 +135,11 @@ class AgencyIdentity(unittest.TestCase):
     def test_rules_confirm_writes_the_agencys_copy_only(self):
         with Home() as h:
             shipped = (ROOT / "data" / "state_rules.csv").read_text()
-            staterules.confirm("NJ", "Lee Compliance")
+            staterules.confirm("NJ", "Lee Compliance", attest=lambda action, expected, by=None: by or "Test Person")
             self.assertEqual((ROOT / "data" / "state_rules.csv").read_text(), shipped)
             self.assertEqual(staterules.rule_for("NJ", "GL", AS_OF)["status"], "ok")
             self.assertEqual(staterules.rule_for("NY", "GL", AS_OF)["status"], "unconfirmed")
-            self.assertTrue((h / "state_rules.csv").exists())
+            self.assertTrue((h / "rule_confirmations.csv").exists())
 
 
 class Guard(unittest.TestCase):
