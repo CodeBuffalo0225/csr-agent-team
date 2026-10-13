@@ -16,13 +16,25 @@ from .desk import Ctx, active_policy, message, money, policy_by_number, result, 
 
 # Requirement -> form numbers / phrases whose presence on the dec page's forms or endorsements list
 # evidences it. ISO form numbers; carriers also use proprietary blanket forms, matched by phrase.
-ENDORSEMENT_EVIDENCE = {
-    "additional_insured": ("CG 20 10", "CG 20 26", "CG 20 33", "CG 20 38", "CG 20 37", "CA 20 48",
-                           "additional insured"),
-    "waiver_of_subrogation": ("CG 24 04", "CA 04 44", "WC 00 03 13", "waiver of subrogation",
-                              "waiver of transfer of rights"),
-    "primary_noncontributory": ("CG 20 01", "primary and noncontributory", "primary and non-contributory"),
+# Two kinds of evidence. BLANKET wording grants the status to anyone the insured's written contract requires,
+# so a certificate holder with such a contract is covered by it. SCHEDULED forms grant it only to the person or
+# organization named in their schedule — the dec page rarely shows the schedule, so the AE confirms the holder
+# is on it before the certificate says so. A form for a different relationship (CG 20 11 managers or lessors
+# of premises) is evidence of nothing for a service contract and matches neither list.
+BLANKET = {
+    "additional_insured": ("CG 20 33", "CG 20 38", "blanket additional insured", "additional insured where required by written contract",
+                           "additional insured - automatic status"),
+    "waiver_of_subrogation": ("blanket waiver", "waiver of subrogation where required by written contract",
+                              "waiver of transfer of rights of recovery where required by written contract"),
+    "primary_noncontributory": ("primary and noncontributory", "primary and non-contributory", "CG 20 01"),
 }
+SCHEDULED = {
+    "additional_insured": ("CG 20 10", "CG 20 26", "CG 20 37", "CA 20 48"),
+    "waiver_of_subrogation": ("CG 24 04", "CA 04 44", "WC 00 03 13"),
+    "primary_noncontributory": (),
+}
+ENDORSEMENT_EVIDENCE = {k: BLANKET[k] + SCHEDULED[k] for k in BLANKET}
+CHECKABLE_LINES = ("GL", "AUTO", "WC", "BOP")
 CLAIMS_MADE = ("CG 00 02", "claims-made", "claims made")
 
 
@@ -31,12 +43,14 @@ def _norm(s: str) -> str:
 
 
 def endorsement_status(dec: dict, requirement: str) -> dict:
+    """listed (blanket wording) | scheduled_verify (a scheduled form: is the holder on its schedule?) | not_listed."""
     listed = [_norm(x) for x in (dec.get("forms") or []) + (dec.get("endorsements") or [])]
-    for needle in ENDORSEMENT_EVIDENCE[requirement]:
-        n = _norm(needle)
-        hit = next((x for x in listed if n in x), None)
-        if hit:
-            return {"requirement": requirement, "status": "listed", "matched": hit}
+    for kind, needles in (("listed", BLANKET[requirement]), ("scheduled_verify", SCHEDULED[requirement])):
+        for needle in needles:
+            n = _norm(needle)
+            hit = next((x for x in listed if n in x), None)
+            if hit:
+                return {"requirement": requirement, "status": kind, "matched": hit}
     return {"requirement": requirement, "status": "not_listed", "matched": None}
 
 
@@ -59,6 +73,7 @@ def _requirements(ctx: Ctx) -> dict:
 def run(ctx: Ctx) -> dict:
     tid, a = ctx.ticket["ticket_id"], ctx.account
     targets, req = _target_policies(ctx), _requirements(ctx)
+    lines_requested = list(targets)
     baseline, gaps, missing_decs, msgs = {}, [], [], []
     umbrella = active_policy(a, "UMBRELLA", ctx.as_of)
     umb_occ = ((umbrella or {}).get("dec_page") or {}).get("limits", {}).get("each_occurrence")
@@ -77,7 +92,8 @@ def run(ctx: Ctx) -> dict:
                           "limits": dec.get("limits") or {}, "deductibles": dec.get("deductibles") or {},
                           "forms": dec.get("forms") or [], "endorsements": dec.get("endorsements") or []}
         listed = " | ".join(_norm(x) for x in (dec.get("forms") or []))
-        if line == "GL" and any(_norm(c) in listed for c in CLAIMS_MADE):
+        baseline[line]["claims_made"] = any(_norm(c) in listed for c in CLAIMS_MADE)
+        if line == "GL" and baseline[line]["claims_made"]:
             gaps.append({"line": line, "kind": "claims_made_form", "severity": "MEDIUM",
                          "detail": "GL is written claims-made: confirm retro date and tail before any carrier change"})
         for key, required in (req.get("limits") or {}).items():
@@ -91,13 +107,16 @@ def run(ctx: Ctx) -> dict:
                              "detail": f"{line} {name} required at {money(required)}; not shown on the dec page"})
             elif have < required:
                 short = required - have
-                via_umbrella = umb_occ is not None and line in ("GL", "AUTO") and umb_occ >= short
+                # an umbrella closes the gap only if the certificate shows it too (a COI that omits it understates
+                # nothing but certifies a limit the holder cannot see)
+                on_cert = ctx.ticket["type"] != "COI" or "UMBRELLA" in lines_requested
+                via_umbrella = umb_occ is not None and line in ("GL", "AUTO") and umb_occ >= short and on_cert
                 gaps.append({"line": line, "kind": "limit_shortfall", "severity": "MEDIUM" if via_umbrella else "HIGH",
                              "limit": name, "required": required, "have": have,
                              "umbrella_each_occurrence": umb_occ if via_umbrella else None,
                              "detail": f"{line} {name} is {money(have)} against {money(required)} required"
                                        + (f"; umbrella {money(umb_occ)} may close it if it follows form (verify)" if via_umbrella else "")})
-        if line in ("GL", "AUTO", "WC", "BOP"):
+        if line in CHECKABLE_LINES:
             for flag in ("additional_insured", "waiver_of_subrogation", "primary_noncontributory"):
                 if not req.get(flag):
                     continue
@@ -109,7 +128,22 @@ def run(ctx: Ctx) -> dict:
                 if st["status"] == "not_listed":
                     gaps.append({"line": line, "kind": "endorsement_not_listed", "severity": "HIGH", "requirement": flag,
                                  "detail": f"{line}: {flag.replace('_', ' ')} required; no supporting endorsement listed on the dec page"})
+                elif st["status"] == "scheduled_verify":
+                    gaps.append({"line": line, "kind": "scheduled_endorsement", "severity": "HIGH", "requirement": flag,
+                                 "detail": f"{line}: {flag.replace('_', ' ')} rests on a scheduled form ({st['matched']}); "
+                                           f"confirm the holder is named on its schedule"})
                 baseline[line].setdefault("endorsement_checks", []).append(st)
+
+    # Requirements the review could not test are gaps, not silence.
+    lines = list(targets)
+    for key, required in (req.get("limits") or {}).items():
+        if key.split(".", 1)[0] not in lines:
+            gaps.append({"line": key.split(".", 1)[0], "kind": "requirement_line_not_reviewed", "severity": "HIGH",
+                         "detail": f"{key} required at {money(required)}, but that line is not on this request"})
+    for flag in ("additional_insured", "waiver_of_subrogation", "primary_noncontributory"):
+        if req.get(flag) and not any(l in CHECKABLE_LINES for l in lines):
+            gaps.append({"line": ",".join(lines), "kind": "requirement_not_checkable", "severity": "HIGH", "requirement": flag,
+                         "detail": f"{flag.replace('_', ' ')} required, but none of {', '.join(lines)} carries it on this desk's checks"})
 
     if missing_decs:
         msgs.append(message("CSR9", "CSR5", "REQUEST", tid, "dec pages needed",

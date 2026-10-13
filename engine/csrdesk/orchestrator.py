@@ -48,7 +48,8 @@ def open_ticket(raw: dict) -> dict:
             "ticket": pii.masked_ticket(raw), "fein_digest": store.fein_hash(raw["account"].get("fein")),
             "status": "OPEN", "steps": {}, "rules": {}, "trail": [], "skipped": [], "messages": [],
             "client_asks": 0, "ae_revisions": {}, "budget_used": {"calls": 0, "writes": 0}, "halt": None,
-            "revision": None, "decisions": [], "approvals": [], "packet": None, "last_asks": None}
+            "revision": None, "decisions": [], "approvals": [], "approved": {}, "packet": None, "last_asks": None,
+            "clock": raw["received"], "audit_head": None}
 
 
 def _gate_drafts(res: dict, run: dict) -> None:
@@ -76,13 +77,34 @@ def _log(config: dict, run: dict) -> audit.AuditLog:
     return audit.AuditLog(Path(config.get("audit_dir") or RUNTIME / "audit") / f"{run['ticket_id']}.jsonl")
 
 
+def _append(run: dict, log, entry: dict) -> None:
+    """Every audit line goes through here so the run carries the chain head: a truncated or replaced log
+    no longer matches it (audit.verify(expected=run["audit_head"]))."""
+    body = log.append(entry)
+    run["audit_head"] = {"hash": body["hash"], "lines": len(log.path.read_text(encoding="utf-8").splitlines())}
+
+
+def draft_digest(d: dict) -> str:
+    """What an approval is bound to: the exact content a human would release."""
+    return audit.digest({k: d[k] for k in ("kind", "to", "subject", "body", "release_tool")})
+
+
+def agency_live(config: dict = None) -> bool:
+    """`live` is the agency's switch, set in data/runtime/desk.json ({"live": true}); never a CLI flag."""
+    p = Path((config or {}).get("desk_config") or RUNTIME / "desk.json")
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("live") is True
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+
+
 def _halt(run: dict, halt: dict, as_of: str, config: dict, log) -> dict:
     run["halt"], run["status"] = halt, "HALTED"
     if routing.RECORD not in run["steps"]:
         run["steps"][routing.RECORD] = _record(run, as_of, config)
         run["rules"][routing.RECORD] = "halt: CSR 8 records before the human takes over"
     run["packet"] = packet.build(run, as_of)
-    log.append({"ticket_id": run["ticket_id"], "event": "halt", **halt})
+    _append(run, log, {"ticket_id": run["ticket_id"], "event": "halt", **halt})
     return run
 
 
@@ -101,11 +123,17 @@ def advance(run: dict, *, as_of: str, now, config: dict = None, fetch=None) -> d
         if step == routing.REVIEW:
             run["status"] = "AWAITING_AE"
             run["packet"] = packet.build(run, as_of)
-            log.append({"ticket_id": run["ticket_id"], "event": "awaiting_ae", "rule": nxt["rule"],
-                        "actions": len(run["packet"]["action_items"])})
+            _append(run, log, {"ticket_id": run["ticket_id"], "event": "awaiting_ae", "rule": nxt["rule"],
+                               "actions": len(run["packet"]["action_items"])})
             break
-        halt = limiter_check(run, step, now, Path(config["kill_switch"]) if config.get("kill_switch") else None)
+        asks = service.collect_asks(ctx) if step == "CSR5:info_request" else None
+        ask_is_new = asks is not None and asks != run.get("last_asks")
+        halt = limiter_check(run, step, now, Path(config["kill_switch"]) if config.get("kill_switch") else None,
+                             ask_is_new=ask_is_new)
+        if halt is None and step == routing.RECORD and budget.check("WRITE") == "BUDGET":
+            halt = {"code": "BUDGET", "why": f"write budget spent ({budget.used} of {thresholds.TICKET_BUDGET})"}
         if halt:
+            run["budget_used"] = dict(budget.used)
             return _halt(run, halt, as_of, config, log)
         res = _record(run, as_of, config) if step == routing.RECORD else WORKERS[step](ctx)
         _gate_drafts(res, run)
@@ -113,20 +141,19 @@ def advance(run: dict, *, as_of: str, now, config: dict = None, fetch=None) -> d
             res["ae_note"] = rev["note"]
             run["revision"] = None
         if step == "CSR5:info_request" and res["drafts"]:
-            asks = res["findings"].get("asks")
-            if asks == run.get("last_asks"):          # dedup fork: the client already has exactly this list
-                res.update(drafts=[], status="done", summary="Client: same items already requested; waiting on the client.")
-            else:
+            if ask_is_new:                             # dedup fork: an identical list is not a new ask
                 run["client_asks"] += 1
                 run["last_asks"] = asks
+            else:
+                res["summary"] = f"Client: same {len(asks)} item(s) as the last request; not counted as a new ask."
         run["steps"][step], run["rules"][step] = res, nxt["rule"]
         run["trail"].append(step)
         run["messages"].extend(res["messages"])
         run["budget_used"] = dict(budget.used)
-        log.append({"ticket_id": run["ticket_id"], "event": "step", "step": step, "rule": nxt["rule"],
-                    "status": res["status"], "summary": res["summary"], "saw": audit.digest(run["ticket"]),
-                    "produced": audit.digest(res), "budget_used": run["budget_used"],
-                    "drafts_discarded": sum(not d["gate"]["ok"] for d in res["drafts"])})
+        _append(run, log, {"ticket_id": run["ticket_id"], "event": "step", "step": step, "rule": nxt["rule"],
+                           "status": res["status"], "summary": res["summary"], "saw": audit.digest(run["ticket"]),
+                           "produced": audit.digest(res), "budget_used": run["budget_used"],
+                           "drafts_discarded": sum(not d["gate"]["ok"] for d in res["drafts"])})
     return run
 
 
@@ -139,13 +166,26 @@ def decide(run: dict, decision: dict, *, as_of: str, now, config: dict = None, f
         raise ValueError(f"ticket is {run['status']}: nothing for the AE to decide")
     config = config or {}
     log = _log(config, run)
+    kind, grants = decision["decision"], list(decision.get("approvals") or [])
+    if grants and kind != "APPROVE":
+        raise ValueError("approvals ride only on an APPROVE; a REVISE, REJECT or ESCALATE grants nothing")
+    if grants and run["status"] != "AWAITING_AE":
+        raise ValueError("a halted ticket is worked by hand; the desk does not release its drafts")
+    drafts = {f"{d['release_tool']}:{run['ticket_id']}/{d['index']}": d for d in packet.all_drafts(run)}
+    for scope in grants:
+        d = drafts.get(scope)
+        if d is None:
+            raise ValueError(f"approval {scope!r} matches no draft on this ticket (scopes: {sorted(drafts)})")
+        if not d["gate"]["ok"]:
+            raise ValueError(f"draft for {scope!r} failed the grounding gate; it cannot be approved")
     run["decisions"].append(decision)
-    run["approvals"] = sorted(set(run["approvals"]) | set(decision.get("approvals") or []))
-    log.append({"ticket_id": run["ticket_id"], "event": "ae_decision", "decision": decision["decision"],
-                "target": decision.get("target"), "approvals": decision.get("approvals") or []})
-    kind = decision["decision"]
+    run["approvals"] = sorted(grants)
+    run["approved"] = {scope: draft_digest(drafts[scope]) for scope in grants}
+    _append(run, log, {"ticket_id": run["ticket_id"], "event": "ae_decision", "decision": kind,
+                       "target": decision.get("target"), "approvals": grants})
     if kind != "REVISE":
         run["status"] = {"APPROVE": "CLOSED_APPROVED", "REJECT": "CLOSED_REJECTED", "ESCALATE": "ESCALATED"}[kind]
+        run["steps"][routing.RECORD] = _record(run, as_of, config)       # CSR 8 records the decision's status
         run["packet"] = packet.build(run, as_of)
         return run
     if run["status"] == "HALTED":
@@ -158,11 +198,14 @@ def decide(run: dict, decision: dict, *, as_of: str, now, config: dict = None, f
     mine = [i for i, s in enumerate(order) if s.split(":")[0] == target]
     if not mine:
         raise ValueError(f"{target} has no work on this ticket; send the revision to a CSR that does")
-    for s in order[mine[0]:]:
+    # New data can change what every earlier step concluded, so it reruns from the first step; a note alone
+    # reruns from the target onward.
+    for s in (order if updated_raw is not None else order[mine[0]:]):
         run["steps"].pop(s)
     run["steps"].pop(routing.RECORD, None)
     if updated_raw is not None:
         _replace_ticket(run, updated_raw)
+    run["clock"] = now.isoformat()                 # agent time restarts when the AE hands the ticket back
     run["skipped"], run["revision"], run["halt"] = [], {"target": target, "note": decision["note"]}, None
     run["ae_revisions"][target] = run["ae_revisions"].get(target, 0) + 1
     run["status"] = "OPEN"
@@ -183,23 +226,31 @@ def refresh(run: dict, raw: dict, *, as_of: str, now, config: dict = None, fetch
         raise ValueError(f"ticket is {run['status']}; only an open ticket takes client updates")
     _replace_ticket(run, raw)
     run["steps"], run["skipped"], run["status"], run["revision"] = {}, [], "OPEN", None
-    _log(config or {}, run).append({"ticket_id": run["ticket_id"], "event": "client_update", "saw": audit.digest(run["ticket"])})
+    run["clock"] = now.isoformat()                 # the client's wait is not the desk's: agent time restarts
+    _append(run, _log(config or {}, run), {"ticket_id": run["ticket_id"], "event": "client_update", "saw": audit.digest(run["ticket"])})
     return advance(run, as_of=as_of, now=now, config=config, fetch=fetch)
 
 
 def release(run: dict, index: int, *, live: bool = False, harness: bool = False, config: dict = None) -> dict:
     """Spine S8 on one draft. `allow` means a human may now release it with its tool; the engine itself
-    still sends nothing. live=False (the default, drafts-only) always denies IRREVERSIBLE releases."""
+    still sends nothing. live=False (the default, drafts-only) always denies IRREVERSIBLE releases.
+    Beyond S8: the ticket must be CLOSED_APPROVED, and an approval counts only while the draft is byte-for-byte
+    the content the AE approved (an approval is bound to a digest, not to a position)."""
     drafts = packet.all_drafts(run)
     if not 0 <= index < len(drafts):
         raise ValueError(f"no draft #{index}")
     d = drafts[index]
     risk = policy.classify(d["release_tool"])["risk"]
     target = f"{run['ticket_id']}/{index}"
-    verdict = policy.decide(d["release_tool"], target, risk, live=live, approvals=run["approvals"],
-                            content_ok=d["gate"]["ok"], harness=harness)
-    _log(config or {}, run).append({"ticket_id": run["ticket_id"], "event": "release_check", "draft": index,
-                                    "tool": d["release_tool"], "scope": f"{d['release_tool']}:{target}", **verdict})
+    scope = f"{d['release_tool']}:{target}"
+    if run["status"] != "CLOSED_APPROVED" and risk != "READ":
+        verdict = {"decision": "deny", "code": "NOT_APPROVED"}
+    else:
+        valid = [a for a in run["approvals"] if run.get("approved", {}).get(a) == draft_digest(d)]
+        verdict = policy.decide(d["release_tool"], target, risk, live=live, approvals=valid,
+                                content_ok=d["gate"]["ok"], harness=harness)
+    _append(run, _log(config or {}, run), {"ticket_id": run["ticket_id"], "event": "release_check", "draft": index,
+                                           "tool": d["release_tool"], "scope": scope, **verdict})
     return {"draft": index, "tool": d["release_tool"], "scope_needed": f"{d['release_tool']}:{target}", "risk": risk, **verdict}
 
 

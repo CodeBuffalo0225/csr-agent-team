@@ -52,7 +52,8 @@ def run(ctx: Ctx) -> dict:
     for owner in sorted({r["owner"] for r in due if r["owner"] not in ("CSR5", "AE")}):
         msgs.append(message("CSR6", owner, "NOTIFY", tid, "renewal task due",
                             "; ".join(r["task"] for r in due if r["owner"] == owner)))
-    urgent = left <= thresholds.RENEWAL_ESCALATE_DAYS
+    renewed = next((q for q in a.get("prior_policies") or [] if q["line"] == p["line"] and q["effective"] == p["expiration"]), None)
+    urgent = left <= thresholds.RENEWAL_ESCALATE_DAYS and renewed is None
     state = (a.get("mailing_address") or {}).get("state")
     rows = staterules.load(ctx.config.get("state_rules"))
     rule = staterules.rule_for(state, p["line"], ctx.as_of, rows) if state else {"status": "needs_data", "value": None,
@@ -63,7 +64,7 @@ def run(ctx: Ctx) -> dict:
                   f"Renewal: {p['line']} {p['policy_number']} expires in {left} days; {len(due)} rung(s) due. {rule_txt}.",
                   findings={"policy_number": p["policy_number"], "line": p["line"], "days_to_expiration": left,
                             "lapsed": False, "rungs_due": due, "client_notice_due": left <= thresholds.RENEWAL_NOTICE_DAYS,
-                            "state_notice_rule": rule},
+                            "state_notice_rule": rule, "renewal_on_file": renewed["policy_number"] if renewed else None},
                   messages=msgs, escalate=f"{p['policy_number']} unbound with {left} days left" if urgent else None)
 
 

@@ -112,13 +112,18 @@ def size_class(gvwr_text: str, stated_gvw: int = None) -> dict:
     When the band straddles a class boundary the class is UNRESOLVED and names both candidates: the
     client must confirm the GVW on the door-jamb sticker. Rating on the lower class would under-rate
     the risk; rating on the upper one overcharges the client. Neither is the engine's call."""
-    if stated_gvw:
-        return {"size_class": _class_for(stated_gvw), "basis": "stated_gvw", "candidates": None}
     m = _GVWR.search(gvwr_text or "")
+    lo = hi = None
+    if m:
+        lo = int(m.group(1).replace(",", ""))
+        open_ended = re.search(r"and above|or more|\+", (gvwr_text or "")[m.end():m.end() + 12] + (gvwr_text or "")[m.start():m.end()], re.I)
+        hi = float("inf") if open_ended and not m.group(2) else int((m.group(2) or m.group(1)).replace(",", ""))
+    if stated_gvw:
+        if lo is not None and not lo <= stated_gvw <= hi:
+            return {"size_class": None, "basis": "stated_gvw_conflicts_with_nhtsa", "candidates": [_class_for(stated_gvw), _class_for(lo)]}
+        return {"size_class": _class_for(stated_gvw), "basis": "stated_gvw", "candidates": None}
     if not m:
         return {"size_class": None, "basis": "unknown", "candidates": None}
-    lo = int(m.group(1).replace(",", ""))
-    hi = int((m.group(2) or m.group(1)).replace(",", ""))
     a, b = _class_for(lo), _class_for(hi)
     if a == b:
         return {"size_class": a, "basis": "nhtsa_gvwr_band", "candidates": None}

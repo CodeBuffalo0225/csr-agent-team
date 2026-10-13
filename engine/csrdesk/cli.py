@@ -4,7 +4,7 @@ stop-limiter said no · 2 bad input.
     bin/csr run <ticket.json> [--as-of D] [--now TS] [--json]     open a ticket and advance it to the AE
     bin/csr decide <ticket_id> <decision.json> [--update t.json]  AE feedback: APPROVE | REVISE | REJECT | ESCALATE
     bin/csr refresh <ticket_id> <ticket.json>                     the client answered; re-run from intake
-    bin/csr release <ticket_id> <draft#> [--live]                 may a human release this draft? (spine S8)
+    bin/csr release <ticket_id> <draft#>                          may a human release this draft? (spine S8; live = data/runtime/desk.json)
     bin/csr packet <ticket_id> [--json]                           the AE packet
     bin/csr renewals <accounts.json> [--as-of D]                  CSR 6 book sweep
     bin/csr vin <VIN> [<VIN> ...]                                 check digit + NHTSA decode
@@ -83,7 +83,8 @@ def cmd_refresh(a):
 
 def cmd_release(a):
     run = orchestrator.load(a.ticket_id)
-    v = orchestrator.release(run, a.index, live=a.live)
+    v = orchestrator.release(run, a.index, live=orchestrator.agency_live())
+    orchestrator.save(run)
     print(json.dumps(v, indent=2))
     return 0 if v["decision"] == "allow" else 1
 
@@ -127,7 +128,8 @@ def cmd_classify(a):
 
 
 def cmd_audit(a):
-    r = audit.AuditLog(orchestrator.RUNTIME / "audit" / f"{a.ticket_id}.jsonl").verify()
+    head = orchestrator.load(a.ticket_id).get("audit_head") if orchestrator.ticket_path(a.ticket_id).exists() else None
+    r = audit.AuditLog(orchestrator.RUNTIME / "audit" / f"{a.ticket_id}.jsonl").verify(expected=head)
     print(json.dumps(r))
     return 0 if r["ok"] else 1
 
@@ -191,7 +193,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("run"); s.add_argument("ticket"); common(s); s.set_defaults(fn=cmd_run)
     s = sub.add_parser("decide"); s.add_argument("ticket_id"); s.add_argument("decision"); s.add_argument("--update"); common(s); s.set_defaults(fn=cmd_decide)
     s = sub.add_parser("refresh"); s.add_argument("ticket_id"); s.add_argument("ticket"); common(s); s.set_defaults(fn=cmd_refresh)
-    s = sub.add_parser("release"); s.add_argument("ticket_id"); s.add_argument("index", type=int); s.add_argument("--live", action="store_true"); s.set_defaults(fn=cmd_release)
+    s = sub.add_parser("release"); s.add_argument("ticket_id"); s.add_argument("index", type=int); s.set_defaults(fn=cmd_release)
     s = sub.add_parser("packet"); s.add_argument("ticket_id"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_packet)
     s = sub.add_parser("renewals"); s.add_argument("accounts"); s.add_argument("--as-of"); s.set_defaults(fn=cmd_renewals)
     s = sub.add_parser("vin"); s.add_argument("vins", nargs="+"); s.set_defaults(fn=cmd_vin)

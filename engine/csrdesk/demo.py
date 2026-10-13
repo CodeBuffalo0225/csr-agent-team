@@ -54,9 +54,9 @@ def main(fetch=None, out_dir: Path = None) -> int:
     c = orchestrator.decide(c, {"ticket_id": "C-2001", "decision": "APPROVE", "target": None,
                                 "note": "Certificate matches the dec page. Release.", "approvals": ["issue_coi:C-2001/0"]},
                             as_of=AS_OF, now=now, config=cfg)
-    show("COI C-2001 AE approve", c)
     dry = orchestrator.release(c, 0, live=False, config=cfg)
-    live = orchestrator.release(c, 0, live=True, config=cfg)
+    live = orchestrator.release(c, 0, live=True, config=cfg)        # what desk.json {"live": true} would allow
+    show("COI C-2001 AE approve", c)
     log.append(f"{'  release #0 drafts-only (live=false)':<44} {dry['decision']} {dry.get('code', '')}")
     log.append(f"{'  release #0 live with scoped approval':<44} {live['decision']} ({live['scope_needed']})")
 
@@ -80,7 +80,7 @@ def main(fetch=None, out_dir: Path = None) -> int:
     sweep = renewals.scan([_ticket("quote.json")["account"]], AS_OF)
     log.append(f"CSR6 book sweep: {len(sweep)} renewal(s) open: "
                + ", ".join(f"{r['policy_number']} {r['days_to_expiration']}d{' (notify CSR5)' if r['client_notice_due'] else ''}" for r in sweep))
-    chains = {tid: audit.AuditLog(Path(cfg["audit_dir"]) / f"{tid}.jsonl").verify() for tid in runs}
+    chains = {tid: audit.AuditLog(Path(cfg["audit_dir"]) / f"{tid}.jsonl").verify(expected=r["audit_head"]) for tid, r in runs.items()}
     log.append("audit chains: " + ", ".join(f"{t} {'ok' if v['ok'] else 'BROKEN'} ({v['lines']})" for t, v in chains.items()))
     print("\n".join(log))
     print(f"\npackets: {out}")

@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 
 from . import publicdata, scoring, thresholds
-from .desk import Ctx, d, draft, message, policy_by_number, result
+from .desk import Ctx, active_policy, draft, message, policy_by_number, result
 
 COVERAGE_CHANGES = ("ADD_DRIVER", "REMOVE_DRIVER", "ADD_VEHICLE", "REMOVE_VEHICLE", "ADD_LOCATION", "LIMIT_CHANGE")
 
@@ -71,7 +71,11 @@ def collect_asks(ctx: Ctx) -> list:
         if m["ask"]:
             asks.append(m["ask"])
     asks += ctx.out("CSR5:verify").get("client_asks", [])
-    if ctx.out("CSR2:loss_runs").get("pending_lines"):
+    per = ctx.out("CSR2:loss_runs").get("per_line") or {}
+    unknown = [l for l, v in per.items() if v["status"] == "prior_unknown"]
+    if unknown:
+        asks.append(f"Who insured the business for {', '.join(unknown)} over the last five years (carrier and policy number)?")
+    if any(v["status"] in ("stale", "missing", "short_history") for v in per.values()):
         asks.append("Please sign the attached letter of authorization so your prior carriers can release loss runs to us.")
     if ctx.out("CSR9:dec_review").get("missing_dec_pages"):
         asks.append("Please send the declarations page for: " + "; ".join(ctx.out("CSR9:dec_review")["missing_dec_pages"]) + ".")
@@ -91,12 +95,14 @@ def info_request(ctx: Ctx) -> dict:
     contact = (a.get("contact") or {})
     to = contact.get("email") or contact.get("phone") or "client (no contact on file)"
     name = (contact.get("name") or "there").split(" ")[0]
-    body = (f"Hi {name},\n\nTo finish your quote we need a few items:\n" + "\n".join(f"- {x}" for x in asks)
+    purpose = {"QUOTE": "your quote", "RENEWAL": "your renewal", "SERVICE": "your policy change",
+               "POLICY_CHECK": "your new policy", "COI": "your certificate", "CLAIM": "your claim"}[ctx.ticket["type"]]
+    body = (f"Hi {name},\n\nTo finish {purpose} we need a few items:\n" + "\n".join(f"- {x}" for x in asks)
             + "\n\nReply here or call us with any questions.\n")
     allowed = [a["insured_name"]] + asks
     return result("CSR5", "info_request", "needs_data", f"Client: {len(asks)} item(s) requested.",
                   findings={"asks": asks, "to": to},
-                  drafts=[draft("email", to, f"Information needed for your quote - {a['insured_name']}", body, "send_email", allowed)])
+                  drafts=[draft("email", to, f"Information needed for {purpose} - {a['insured_name']}", body, "send_email", allowed)])
 
 
 def renewal_notice(ctx: Ctx) -> dict:
@@ -149,6 +155,7 @@ def service(ctx: Ctx) -> dict:
         if drv.get("mvr_consent") is not True:
             missing.append("the driver's signed consent to run a motor vehicle report")
     if kind == "ADD_VEHICLE":
+        missing += ctx.out("CSR5:verify").get("client_asks") or []      # a straddling GVW or a bad VIN blocks rating
         veh = ctx.out("CSR5:verify").get("vehicles") or []
         new = next((v for v in veh if r.get("vehicle") and v["vin"] == r["vehicle"]["vin"].upper()), None)
         if not r.get("vehicle"):
@@ -162,11 +169,15 @@ def service(ctx: Ctx) -> dict:
                       findings={"route": "client", "change_type": kind, "missing": missing},
                       drafts=[draft("email", to, f"Information needed for your policy change - {a['insured_name']}",
                                     body, "send_email", missing)])
-    pols = [p for p in a.get("prior_policies") or [] if d(p["effective"]) <= d(ctx.as_of) < d(p["expiration"])]
-    target = next((p for p in pols if p["line"] == ("AUTO" if "DRIVER" in kind or "VEHICLE" in kind else "GL")), pols[0] if pols else None)
+    line = r.get("line") or ("AUTO" if "DRIVER" in kind or "VEHICLE" in kind else None)
+    if line is None:
+        return result("CSR5", "service", "needs_data", f"Service: {kind} does not say which policy to change.",
+                      findings={"route": "client", "change_type": kind,
+                                "missing": ["which policy (line of coverage) this change applies to"]})
+    target = active_policy(a, line, ctx.as_of)
     if target is None:
-        return result("CSR5", "service", "escalate", "Service: no policy in force to endorse.",
-                      findings={"route": "ae", "change_type": kind}, escalate="change requested with no policy in force")
+        return result("CSR5", "service", "escalate", f"Service: no {line} policy in force to endorse.",
+                      findings={"route": "ae", "change_type": kind}, escalate=f"{kind} requested with no {line} policy in force")
     body = (f"Endorsement request, {target['carrier']} policy {target['policy_number']}: {kind.replace('_', ' ').lower()}. "
             f"Details: {r['details']}")
     return result("CSR5", "service", "done", f"Service: endorsement request drafted on {target['policy_number']}; AE approves submission.",

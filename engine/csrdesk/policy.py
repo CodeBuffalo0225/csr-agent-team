@@ -47,10 +47,12 @@ def _word(alternatives: str) -> str:
 
 # (risk, pattern, why). First match wins, top to bottom.
 RULES = tuple((risk, re.compile(pattern), why) for risk, pattern, why in (
-    ("READ", r"(?:^|_)(?:submissions?|claims?|fnol|endorsements?|payments?|binders?)_(?:status|show|list|index|get|search)(?:_|$)|"
-     + _word("send_status"),
-     "reading the status of a submission, claim, endorsement or payment is not the act"),
-    ("IRREVERSIBLE", _word("bind|binds|binder|issue|issues|certify|submit|submits|submission|endorse|endorsement|"
+    ("READ", r"^(?:(?:get|list|show|read|fetch|view|check|search|query)_)?(?:submissions?|claims?|fnol|endorsements?|payments?|"
+     r"binders?|certificates?)_(?:status|show|list|index|get|search)$|^(?:get_)?send_status$",
+     "reading the status of a submission, claim, endorsement or payment is not the act; anchored, so "
+     "update_claim_status or send_status_update never lands here"),
+    ("IRREVERSIBLE", _word("bind|binds|binder|issue|issues|certify|certificates?|cois?|acord_?25|evidence_of_insurance|"
+                           "submit|submits|submission|endorse|endorsement|"
                            "cancel|cancellation|nonrenew|non_renew|reinstate|rescind|fnol|accept|decline_quote"),
      "creates or changes coverage, or certifies it to a third party: E&O exposure the moment it happens"),
     ("IRREVERSIBLE", r"(?:file|open|report|submit)_?(?:a_)?(?:claim|loss)",

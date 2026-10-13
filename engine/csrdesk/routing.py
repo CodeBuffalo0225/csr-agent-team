@@ -58,7 +58,7 @@ def plan(ctx: Ctx) -> list:
             ("CSR10:exclusions", within(90), "R-R4 within 90 days: exclusions on the expiring forms"),
             ("CSR4:market", lambda: within(90)() and bool(renewals.remarket_reasons(ctx)),
              "R-R5 remarket fork true (rate, loss ratio, non-renewal, gap, exclusion)"),
-            ("CSR5:renewal_notice", within(thresholds.RENEWAL_NOTICE_DAYS), "R-R6 within RENEWAL_NOTICE_DAYS: CSR 6 told CSR 5"),
+            ("CSR5:renewal_notice", within(thresholds.RENEWAL_NOTICE_DAYS), "R-R6 within RENEWAL_NOTICE_DAYS: CSR 6 told CSR 5", True),
             ("CSR5:info_request", lambda: live() and bool(service.collect_asks(ctx)), "R-R7 anything outstanding: one client request"),
         ]
     if kind == "COI":
@@ -75,6 +75,8 @@ def plan(ctx: Ctx) -> list:
             ("CSR5:service", lambda: True, "R-S2 service change by type"),
             ("CSR9:dec_review", lambda: ct in ("POLICY_QUESTION", "LIMIT_CHANGE"), "R-S3 coverage question or limit change: dec page"),
             ("CSR10:exclusions", lambda: ct == "POLICY_QUESTION", "R-S4 coverage question: exclusions"),
+            ("CSR5:info_request", lambda: ctx.out("CSR5:service").get("route") != "client" and bool(service.collect_asks(ctx)),
+             "R-S5 verify raised client questions the service draft did not carry"),
         ]
     if kind == "CLAIM":
         return [

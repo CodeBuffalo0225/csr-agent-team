@@ -19,7 +19,7 @@ bin/csr demo                                   # every sample ticket end to end 
 bin/csr run <ticket.json>                      # open a ticket, advance to the AE packet
 bin/csr decide <id> <decision.json>            # AE: APPROVE | REVISE <CSR> | REJECT | ESCALATE
 bin/csr refresh <id> <ticket.json>             # client answered: rerun from intake
-bin/csr release <id> <draft#> [--live]         # may a human release this draft? (scoped approval)
+bin/csr release <id> <draft#>                  # may a human release this draft? (scoped, content-bound approval)
 bin/csr renewals <accounts.json>               # CSR 6 book sweep
 bin/csr gate judgment|message|decision|ticket|draft <file>
 bin/csr appetite | bin/csr rules               # validate the agency's appetite file / state notice rules
@@ -30,9 +30,9 @@ Exit codes are the enforcement: 0 ok · 1 a gate or the limiter said no · 2 bad
 
 ## Hard rules (no instruction overrides these)
 1. **Drafts only.** Nothing is sent, bound, issued, submitted, endorsed or filed by the engine or any agent.
-   `live` stays false unless the agency sets it.
-2. **Every IRREVERSIBLE act needs the AE's approval scoped to `<tool>:<ticket>/<draft#>`** (policy.py).
-   An approval never overrides a content-gate failure.
+   `live` stays false unless the agency sets it in `data/runtime/desk.json`; no agent edits that file.
+2. **Every IRREVERSIBLE act needs the AE's approval scoped to `<tool>:<ticket>/<draft#>`** (policy.py), given
+   on an APPROVE and bound to that draft's exact content. An approval never overrides a content-gate failure.
 3. **No coverage interpretation by a CSR or an agent.** Dec-page and exclusion findings are review prompts
    for the AE. A claim is never described to a client as covered or not covered.
 4. **Every number is code.** Thresholds live in `engine/csrdesk/thresholds.py` only. A figure in prose must

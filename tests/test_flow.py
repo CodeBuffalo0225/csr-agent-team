@@ -163,15 +163,18 @@ class AeLoop(unittest.TestCase):
         run["approvals"] = ["issue_coi:C-2001/1"]
         self.assertEqual(orchestrator.release(run, 0, live=True, config=cfg)["code"], "NO_APPROVAL")
 
-    def test_ungrounded_draft_is_discarded_and_blocks_release(self):
+    def test_draft_changed_after_approval_cannot_release(self):
         run, cfg = go("coi.json")
+        run = orchestrator.decide(run, {"ticket_id": "C-2001", "decision": "APPROVE", "target": None, "note": "ok",
+                                        "approvals": ["issue_coi:C-2001/0"]}, as_of=AS_OF, now=NOW, config=cfg)
         d = run["steps"]["CSR3:coi"]["drafts"][0]
         d["body"] += " Limits were raised to $5,000,000 last week."
         from csrdesk import grounding
         d["gate"] = grounding.ground(d["body"], d["allowed"])
         self.assertFalse(d["gate"]["ok"])
-        run["approvals"] = ["issue_coi:C-2001/0"]
         self.assertEqual(orchestrator.release(run, 0, live=True, config=cfg)["code"], "CONTENT_BLOCKED")
+        d["gate"] = {"ok": True, "ungrounded": []}                 # even if the gate were fooled, the digest is not
+        self.assertEqual(orchestrator.release(run, 0, live=True, config=cfg)["code"], "NO_APPROVAL")
 
 
 class WriterAndAudit(unittest.TestCase):

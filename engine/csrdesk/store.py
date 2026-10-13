@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import hmac
 import json
+import os
 import re
+import secrets
 import sqlite3
 from pathlib import Path
 
@@ -47,10 +50,29 @@ def name_key(name: str, zip_code: str = None) -> str:
     return f"{n}|{(zip_code or '')[:5]}"
 
 
+PEPPER_ENV = "CSR_DESK_PEPPER"
+PEPPER_FILE = ROOT / "data" / "runtime" / "pepper"
+
+
+def _pepper() -> bytes:
+    """A per-install secret so a FEIN digest cannot be brute-forced (there are only 10^9 FEINs; a plain
+    SHA-256 of one falls in a fraction of a second). From $CSR_DESK_PEPPER, else a random key created once in
+    data/runtime/pepper (gitignored, owner-only). Losing it only breaks dedup against older records."""
+    env = os.environ.get(PEPPER_ENV)
+    if env:
+        return env.encode()
+    if not PEPPER_FILE.exists():
+        PEPPER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(PEPPER_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_hex(32))
+    return PEPPER_FILE.read_text().strip().encode()
+
+
 def fein_hash(fein: str) -> str:
-    """Computed once at intake from the raw FEIN; only the digest travels or is stored."""
+    """Computed once at intake from the raw FEIN; only this keyed digest travels or is stored."""
     digits = re.sub(r"\D", "", fein or "")
-    return hashlib.sha256(digits.encode()).hexdigest() if len(digits) == 9 else None
+    return hmac.new(_pepper(), digits.encode(), hashlib.sha256).hexdigest() if len(digits) == 9 else None
 
 
 class Store:
@@ -72,8 +94,13 @@ class Store:
             row = self.db.execute("SELECT account_key FROM accounts WHERE fein_hash = ?", (fh,)).fetchone()
             if row:
                 return row[0], "fein"
-        row = self.db.execute("SELECT account_key FROM accounts WHERE name_key = ?", (name_key(insured_name, zip_code),)).fetchone()
-        return (row[0], "name_zip") if row else (None, None)
+        # name + ZIP matches only when FEINs cannot disagree: two different FEINs are two legal entities,
+        # however alike the names ("Acme Roofing LLC" and "Acme Roofing Inc")
+        for key, stored in self.db.execute("SELECT account_key, fein_hash FROM accounts WHERE name_key = ?",
+                                           (name_key(insured_name, zip_code),)):
+            if not (fh and stored and fh != stored):
+                return key, "name_zip"
+        return None, None
 
     def write(self, actor: str, *, fein_digest: str, masked_account: dict, ticket_id: str, ticket_type: str,
               status: str, packet: dict) -> dict:
@@ -87,7 +114,8 @@ class Store:
         record = json.dumps(masked_account, sort_keys=True)
         with self.db:
             if key is None:
-                key = hashlib.sha256(name_key(masked_account["insured_name"], zip_code).encode()).hexdigest()[:16]
+                seed = name_key(masked_account["insured_name"], zip_code) + (fein_digest or "")
+                key = hashlib.sha256(seed.encode()).hexdigest()[:16]
                 self.db.execute("INSERT INTO accounts VALUES (?,?,?,?,?,?,?)",
                                 (key, fein_digest, name_key(masked_account["insured_name"], zip_code),
                                  masked_account["insured_name"], record, now, now))

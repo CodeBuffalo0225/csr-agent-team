@@ -46,14 +46,17 @@ def filter_markets(rows: list, line: str, state: str, naics: str, revenue, as_of
     kept, dropped = [], []
     for row in rows:
         why = None
-        states = [s.strip() for s in row["states"].split("|")]
-        prefixes = [s.strip() for s in row["naics_prefixes"].split("|")]
+        states = [s.strip() for s in row["states"].split("|") if s.strip()]
+        prefixes = [s.strip() for s in row["naics_prefixes"].split("|") if s.strip()]   # "238|" is "238", not "everything"
+        banded = bool((row.get("min_revenue") or "").strip() or (row.get("max_revenue") or "").strip())
         if row["line"].strip() != line:
             continue
         if "*" not in states and state not in states:
             why = f"not writing in {state}"
-        elif "*" not in prefixes and not any(naics.startswith(p) for p in prefixes):
+        elif not prefixes or ("*" not in prefixes and not any(naics.startswith(p) for p in prefixes)):
             why = f"NAICS {naics} outside appetite"
+        elif banded and revenue is None:
+            why = "revenue unknown; this market has a revenue band"
         elif revenue is not None and row.get("min_revenue") and revenue < float(row["min_revenue"]):
             why = "revenue below band"
         elif revenue is not None and row.get("max_revenue") and revenue > float(row["max_revenue"]):
@@ -62,15 +65,19 @@ def filter_markets(rows: list, line: str, state: str, naics: str, revenue, as_of
             why = f"AM Best {row.get('am_best') or 'unrated'} below {thresholds.AM_BEST_FLOOR}"
         elif not row.get("observed"):
             why = "appetite row has no verified date"
-        elif scoring.age_days(row["observed"], as_of) > thresholds.APPETITE_MAX_AGE_DAYS:
-            why = f"appetite last verified {row['observed']}: stale"
+        else:
+            try:
+                if scoring.age_days(row["observed"], as_of) > thresholds.APPETITE_MAX_AGE_DAYS:
+                    why = f"appetite last verified {row['observed']}: stale"
+                ev = schemas.check_evidence({"status": "VERIFIED" if row.get("appetite_url") else "INFERENCE",
+                                             "url": row.get("appetite_url") or None, "observed": row["observed"]}, as_of)
+            except schemas.GateError as e:          # a bad row is dropped and named, never a crash of the whole step
+                why = f"appetite row invalid: {e.code}"
         if why:
             dropped.append({"carrier": row["carrier"], "line": line, "why": why})
         else:
             kept.append({"carrier": row["carrier"], "line": line, "am_best": row["am_best"],
-                         "evidence": schemas.check_evidence(
-                             {"status": "VERIFIED" if row.get("appetite_url") else "INFERENCE",
-                              "url": row.get("appetite_url") or None, "observed": row["observed"]}, as_of),
+                         "evidence": ev,
                          "notes": row.get("notes") or ""})
     return kept, dropped
 

@@ -17,7 +17,7 @@ ACORD_FORMS = {
     "WC": ["ACORD 130 Workers Compensation Application"],
     "PROPERTY": ["ACORD 140 Property Section"],
     "UMBRELLA": ["ACORD 131 Umbrella / Excess Section"],
-    "BOP": ["ACORD 126 Commercial General Liability Section", "ACORD 140 Property Section"],
+    "BOP": ["carrier BOP application (or ACORD 126 + ACORD 140, as the carrier accepts)"],
     "PROFESSIONAL": ["carrier supplemental application"],
     "CYBER": ["carrier supplemental application"],
     "EPLI": ["carrier supplemental application"],

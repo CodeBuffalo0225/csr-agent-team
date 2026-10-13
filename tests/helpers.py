@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "engine"))
+os.environ.setdefault("CSR_DESK_PEPPER", "test-pepper-not-a-secret")   # tests never create data/runtime/pepper
 
 from csrdesk import pii, policy, schemas, thresholds  # noqa: E402
 from csrdesk.desk import Ctx  # noqa: E402

@@ -38,9 +38,11 @@ class AuditLog:
             f.write(json.dumps(body, sort_keys=True, default=str) + "\n")
         return body
 
-    def verify(self) -> dict:
+    def verify(self, expected: dict = None) -> dict:
+        """Chain check. With `expected` (the run's audit_head) a truncated or wholesale-replaced log fails too:
+        a chain alone cannot tell that its last lines were cut off."""
         if not self.path.exists():
-            return {"ok": True, "lines": 0}
+            return {"ok": not expected, "lines": 0, **({"broken_at": "missing"} if expected else {})}
         prev = GENESIS
         lines = self.path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
@@ -49,4 +51,6 @@ class AuditLog:
             if rec["prev"] != prev or digest(rec) != claimed:
                 return {"ok": False, "lines": len(lines), "broken_at": i}
             prev = claimed
+        if expected and (expected.get("lines") != len(lines) or expected.get("hash") != prev):
+            return {"ok": False, "lines": len(lines), "broken_at": "truncated_or_replaced", "expected_lines": expected.get("lines")}
         return {"ok": True, "lines": len(lines)}

@@ -90,6 +90,12 @@ def run(ctx: Ctx) -> dict:
                           "severity": "HIGH" if found and pat != r".*" else ("MEDIUM" if pat != r".*" else "LOW")})
         if t["type"] == "COI" and t["request"].get("project_type") == "residential":
             res = next((f for f in flags if f["exclusion"].startswith("residential")), None)
+            if res is None:                    # the project, not the operation's wording, makes this check apply
+                _, name, evidence, why = next(e for e in BY_OPERATION if e[1].startswith("residential"))
+                found = next((x for x in listed for e in evidence if e.lower() in x), None)
+                res = {"exclusion": name, "trigger": "project_type", "matched": found, "why": why, "severity": "HIGH" if found else "MEDIUM",
+                       "status": "listed" if found else ("not_listed" if has_forms else "no_forms_to_check")}
+                flags.append(res)
             if res and res["status"] == "listed":
                 res["severity"] = "CRITICAL"
                 res["why"] = "certificate is for residential work and a residential exclusion is listed: do not issue without AE"

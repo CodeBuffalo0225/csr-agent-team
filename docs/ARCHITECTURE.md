@@ -136,13 +136,13 @@ AE gets the packet with the reason. All numbers live in `thresholds.py`.
 | Code | Trips when | Why it exists |
 |---|---|---|
 | KILL_SWITCH | `data/runtime/STOP` exists | the agency can stop everything in one move |
-| WALL_CLOCK | ticket older than its SLA: COI 4h · claim 2h · service 24h · quote 72h · renewal 30d | a stuck ticket becomes a person's job, not an agent's loop |
+| WALL_CLOCK | desk time since receipt or since the last human hand-back (AE revise, client reply) exceeds the SLA: COI 4h · claim 2h · service 24h · quote / policy check 72h · renewal 30d | a stuck ticket becomes a person's job; the AE's or the client's wait is never counted against the desk |
 | MAX_HOPS | > 40 steps | the absolute ceiling |
 | STEP_REVISIT | one step runs > 4 times (1 + 3 revisions) | rework without progress |
-| PING_PONG | the last 6 steps alternate between two agents | the classic two-agent loop |
+| PING_PONG | the last 6 steps alternate between two agents | defensive: today's plans are linear, so this guards future plans and hand edits |
 | MESSAGE_STORM | > 80 bus messages | a loop that talks instead of acts |
-| CLIENT_ASK_CAP | a 4th info request to the client | after three emails, the AE calls; identical repeat lists are deduped and never count |
-| BUDGET | > 40 outside calls / 12 writes per ticket (spine S9) | cost runaway |
+| CLIENT_ASK_CAP | a 4th *new* info request to the client | after three emails, the AE calls; an identical list is re-shown as a draft but never counts and never trips the cap |
+| BUDGET | > 40 outside calls / 12 record writes per ticket (spine S9; every CSR 8 record is a write) | cost runaway |
 | AE_REVISION_CAP_CSR / _TOTAL | > 3 send-backs to one CSR / > 6 per ticket | the AE↔CSR loop needs a conversation, not another revision |
 
 ## 5. The AE feedback loop
@@ -150,10 +150,13 @@ AE gets the packet with the reason. All numbers live in `thresholds.py`.
 `bin/csr decide <ticket> <decision.json>`:
 
 - **APPROVE** with scoped approvals (`"issue_coi:C-2001/0"`): one approval, one action, one draft (spine S8).
-  `bin/csr release` still denies while `live` is false. Drafts-only is the default.
+  Approvals ride only on APPROVE, must name a draft that exists and passed the grounding gate, and are bound to
+  that draft's exact content (a digest): if the draft changes, the approval no longer counts. Release also
+  requires the ticket to be CLOSED_APPROVED. `bin/csr release` denies while the agency's `live` switch
+  (`data/runtime/desk.json`) is off. Drafts-only is the default; there is no CLI flag to turn it on.
 - **REVISE → CSR n + note:** the engine reruns that CSR's step and everything after it, the note travels to
-  the CSR, CSR 8 re-records, and the AE gets a fresh packet. Optionally with updated ticket data ("dec page
-  attached").
+  the CSR, CSR 8 re-records, and the AE gets a fresh packet. With updated ticket data ("dec page attached") it
+  reruns from intake, because new data can change every earlier conclusion.
 - **REJECT / ESCALATE:** closed, or sent up to the principal.
 - **Client replies** come back through `bin/csr refresh`. Same ticket, new data, rerun from intake, with
   counters carried over so refreshes can't loop forever.
@@ -166,12 +169,20 @@ AE gets the packet with the reason. All numbers live in `thresholds.py`.
 - **Grounding gate** on every draft: one figure not traceable to the record or computed output and the
   draft is discarded whole. A model can't round a $1M limit into "$2M".
 - **Schema gate** on every record; a model can't supply a total, tier, score, rank or age (spine S2).
-- **PII**: license numbers and DOBs (DPPA), FEINs (GLBA) are masked at intake. The FEIN is stored only as a
-  hash. A test proves no raw value reaches run state, the DB or the audit log.
+- **PII**: license numbers and DOBs (DPPA), FEINs (GLBA) are masked at intake, including SSN/FEIN/license
+  patterns pasted into free text. The FEIN is stored only as a keyed HMAC (per-install secret), so the digest
+  can't be brute-forced, and two different FEINs never merge into one account however alike the names. Errors
+  never echo a DOB. Tests prove no raw value reaches run state, the DB or the audit log.
 - **Honest degradation**: no appetite file → `needs_key`, not carriers from memory; NHTSA/Census down →
   `unavailable`, not an empty schedule; unknown premium history → loss ratio `None`, not a ratio over the
   wrong window.
-- **Audit**: hash-chained JSONL per ticket; an edited line breaks `bin/csr audit`.
+- **Audit**: hash-chained JSONL per ticket, and the run state carries the chain head: an edited line, a cut-off
+  tail or a replaced file fails `bin/csr audit`.
+- **COI wording**: the requester's description goes on a certificate only if it makes no coverage statement
+  (insured status, waiver, primary, limits, amounts); otherwise the AE words it. ADDL INSD / SUBR WVD are Y only
+  for blanket "where required by written contract" wording; a scheduled form (CG 20 10, CG 20 26, CG 24 04 ...)
+  needs the AE to confirm the holder is on its schedule; a form for another relationship (CG 20 11) counts for
+  nothing. Relying on an umbrella requires the umbrella on the certificate. Property goes on ACORD 24/27/28.
 - **Spine conformance**: the shared spine-spec v1.1.0 vectors (63/63) run in the test suite against the
   production gates, plus tests proving that breaking a gate turns its vectors red.
 
@@ -240,7 +251,21 @@ What remains is the agency's, not code: load the appetite guide and verified sta
 and replay 20 closed tickets (`bin/csr replay`) before trusting it unsupervised.
 ```
 
-## 10. What this is not
+## 10. Independent review (2026-10-13)
+
+A fresh-context reviewer (read-only, not the builder) audited the desk and confirmed 15 findings, two
+critical: requester text could put coverage claims on a certificate, and approvals were not bound to the
+draft they approved (a regenerated or rejected draft could still release). Every finding is fixed and has a
+regression test in `tests/test_review_regressions.py` built from the reviewer's own failure scenario. The
+others: status-update tools classified READ; the wall clock charging the AE's and client's wait to the desk;
+the residential gate keyed to operation words instead of the project; loss runs calling an established
+business a new venture and judging freshness on the wrong carrier; the client-ask cap firing before dedup;
+COI requirements on uncheckable lines passing silently; generous AI/WOS evidence; DB status, write budget and
+audit truncation not matching these docs; an unsalted FEIN digest; masked placeholders marked "complete" on
+ACORD apps; a loss ratio mixing out-of-window claims and unearned premium; service changes guessing the line;
+and a market filter that let unknown revenue through.
+
+## 11. What this is not
 
 - It doesn't bind, issue, file, submit or send. Drafts only, until the agency sets `live` and the AE grants a
   scoped approval per act.

@@ -65,7 +65,7 @@ REQUEST_KEYS = {
     "QUOTE": ("lines", "effective_date", "contract_requirements"),
     "RENEWAL": ("policy_number",),
     "COI": ("holder_name", "holder_address", "lines", "description", "project_type", "requirements"),
-    "SERVICE": ("change_type", "details", "driver", "vehicle"),
+    "SERVICE": ("change_type", "details", "driver", "vehicle", "line"),
     "CLAIM": ("line", "date_of_loss", "description", "injury", "estimated_amount", "reported_by"),
     "POLICY_CHECK": ("policy_number", "proposal"),
 }
@@ -105,12 +105,13 @@ def _fail(code: str, path: str, message: str) -> NoReturn:
 # ── Dates ─────────────────────────────────────────────────────────────────────
 
 def parse_date(value: Any, path: str = "$") -> dt.date:
+    shown = "<withheld: personal data>" if path.endswith(".dob") else repr(value)   # never echo a raw DOB into an error
     if not isinstance(value, str) or not ISO_DATE.match(value):
-        _fail("BAD_DATE", path, f"expected YYYY-MM-DD, got {value!r}")
+        _fail("BAD_DATE", path, f"expected YYYY-MM-DD, got {shown}")
     try:
         return dt.date.fromisoformat(value)
     except ValueError:
-        _fail("BAD_DATE", path, f"expected YYYY-MM-DD, got {value!r}")
+        _fail("BAD_DATE", path, f"expected YYYY-MM-DD, got {shown}")
 
 
 def as_date(value: Any, path: str = "as_of") -> dt.date:
@@ -427,6 +428,7 @@ def check_ticket(t: Any, path: str = "$") -> dict:
     elif kind == "SERVICE":
         _enum(r, "change_type", rp, CHANGE_TYPES)
         _str(r, "details", rp, max_len=1000)
+        _enum(r, "line", rp, LINES, nullable=True)
         if r.get("driver") is not None:
             _check_driver(r["driver"], f"{rp}.driver")
         if r.get("vehicle") is not None:

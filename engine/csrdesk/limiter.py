@@ -10,12 +10,13 @@ who has not answered three, an AE and a CSR revising the same COI all afternoon.
 
 Codes, in the order checked (cheapest and most absolute first):
   KILL_SWITCH      data/runtime/STOP exists: every ticket halts
-  WALL_CLOCK       ticket older than WALL_CLOCK_HOURS[type]: a human takes it
+  WALL_CLOCK       agent time since receipt or the last human hand-back > WALL_CLOCK_HOURS[type]
   MAX_HOPS         more than MAX_HOPS steps
   STEP_REVISIT     one step (agent:task) about to run more than MAX_VISITS_PER_STEP times
-  PING_PONG        the last steps alternate between the same two agents MAX_PINGPONG+1 times
+  PING_PONG        the last steps alternate between the same two agents MAX_PINGPONG+1 times (defensive: the
+                   current plans are linear, so this guards future plans and hand edits)
   MESSAGE_STORM    more than MAX_MESSAGES bus messages
-  CLIENT_ASK_CAP   a client info request beyond MAX_CLIENT_ASKS (the AE calls instead)
+  CLIENT_ASK_CAP   a NEW client info request beyond MAX_CLIENT_ASKS (an identical list is not a new ask)
   BUDGET           spine S9: the ticket's outside-call budget is spent (checked inside publicdata calls too)
   AE_REVISION_CAP_CSR / AE_REVISION_CAP_TOTAL   send-backs to one CSR / across the ticket
 """
@@ -33,15 +34,16 @@ def _agent(step: str) -> str:
     return step.split(":", 1)[0]
 
 
-def check(run: dict, step: str, now, kill_switch: Path = None) -> dict:
+def check(run: dict, step: str, now, kill_switch: Path = None, ask_is_new: bool = True) -> dict:
     ks = kill_switch or (ROOT / thresholds.KILL_SWITCH)
     if ks.exists():
         return {"code": "KILL_SWITCH", "why": f"{ks} exists: all tickets halted by the agency"}
-    opened = schemas.parse_timestamp(run["received"])
-    age_h = (now - opened).total_seconds() / 3600
+    # agent time: from receipt, or from the last time a human (AE revise, client reply) handed it back
+    started = schemas.parse_timestamp(run.get("clock") or run["received"])
+    age_h = (now - started).total_seconds() / 3600
     cap_h = thresholds.WALL_CLOCK_HOURS[run["type"]]
     if age_h > cap_h:
-        return {"code": "WALL_CLOCK", "why": f"{run['type']} ticket is {age_h:.1f}h old (limit {cap_h}h)"}
+        return {"code": "WALL_CLOCK", "why": f"{run['type']} ticket has been with the desk {age_h:.1f}h since its last hand-off (limit {cap_h}h)"}
     trail = run["trail"]
     if len(trail) >= thresholds.MAX_HOPS:
         return {"code": "MAX_HOPS", "why": f"{len(trail)} steps taken (limit {thresholds.MAX_HOPS})"}
@@ -55,7 +57,7 @@ def check(run: dict, step: str, now, kill_switch: Path = None) -> dict:
         return {"code": "PING_PONG", "why": f"{tail[0]} and {tail[1]} have handed back and forth {thresholds.MAX_PINGPONG + 1} times"}
     if len(run["messages"]) > thresholds.MAX_MESSAGES:
         return {"code": "MESSAGE_STORM", "why": f"{len(run['messages'])} bus messages (limit {thresholds.MAX_MESSAGES})"}
-    if step == "CSR5:info_request" and run["client_asks"] >= thresholds.MAX_CLIENT_ASKS:
+    if step == "CSR5:info_request" and ask_is_new and run["client_asks"] >= thresholds.MAX_CLIENT_ASKS:
         return {"code": "CLIENT_ASK_CAP", "why": f"client already asked {run['client_asks']} times; the AE calls instead"}
     used, lim = run["budget_used"], thresholds.TICKET_BUDGET
     if any(used.get(k, 0) >= lim[k] for k in lim):

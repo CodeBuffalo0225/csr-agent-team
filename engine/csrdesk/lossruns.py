@@ -20,8 +20,9 @@ from .desk import Ctx, d, draft, message, money, result, ticket_lines
 
 
 def _premiums_in_window(account: dict, line: str, start: dt.date, end: dt.date) -> float:
-    """Total written premium for `line` across [start, end], or None unless the policies on file cover the
-    whole window without a gap and every one has a premium. Five years of losses over one year of premium
+    """EARNED premium for `line` across [start, end] (each term's premium pro-rated to the days it overlaps
+    the window, so the current term counts only what has elapsed), or None unless the policies on file cover
+    the whole window without a gap and every one has a premium. Five years of losses over one year of premium
     is not a loss ratio; it is a misleading number, and an unknown is not a benign value."""
     pols = sorted((p for p in account.get("prior_policies") or []
                    if p["line"] == line and d(p["expiration"]) > start and d(p["effective"]) < end),
@@ -31,7 +32,12 @@ def _premiums_in_window(account: dict, line: str, start: dt.date, end: dt.date) 
     for prev, nxt in zip(pols, pols[1:]):
         if d(nxt["effective"]) > d(prev["expiration"]):
             return None
-    return float(sum(p["premium"] for p in pols))
+    earned = 0.0
+    for p in pols:
+        eff, exp = d(p["effective"]), d(p["expiration"])
+        overlap = (min(exp, end) - max(eff, start)).days
+        earned += float(p["premium"]) * max(overlap, 0) / (exp - eff).days
+    return round(earned, 2)
 
 
 def _years_before(day: dt.date, years: int) -> dt.date:
@@ -61,26 +67,40 @@ def run(ctx: Ctx) -> dict:
         runs = [r for r in a.get("loss_runs") or [] if r["line"] == line]
         priors = [p for p in a.get("prior_policies") or [] if p["line"] == line]
         if not runs and not priors:
-            # no history on this line: a new venture, or a new line (umbrella over existing GL/auto) whose
-            # carriers underwrite from the underlying lines' runs
-            status = "new_venture" if (yib == 0 or not a.get("prior_policies")) else "new_line"
+            if yib == 0:
+                status = "new_venture"            # truly new: nothing to order
+            elif a.get("prior_policies"):
+                status = "new_line"               # e.g. an umbrella over existing GL/auto: underlying runs apply
+            else:
+                status = "prior_unknown"          # an established business with no prior policy on file: ask, never assume
             per_line[line] = {"status": status, "valued_as_of": None, "valuation_age_days": None, "years_required": years}
             continue
-        newest = max((r["valued_as_of"] for r in runs), default=None)
+        start_needed = required_start(priors, as_of, years)
+        window_carriers = {p["carrier"] for p in priors if d(p["expiration"]) > start_needed}
+        run_carriers = {r["carrier"] for r in runs}
+        missing_carriers = sorted(window_carriers - run_carriers)
+        # freshness is judged on the run that covers the most recent period (the current carrier's), never on
+        # whichever carrier happened to send the newest valuation
+        current_run = max(runs, key=lambda r: (r["period_end"], r["valued_as_of"])) if runs else None
+        newest = current_run["valued_as_of"] if current_run else None
         earliest = min((r["period_start"] for r in runs), default=None)
         age = scoring.age_days(newest, as_of) if newest else None
-        if not runs:
+        stale_carriers = sorted({r["carrier"] for r in runs if scoring.age_days(r["valued_as_of"], as_of) > thresholds.LOSS_RUN_MAX_AGE_DAYS
+                                 and r["carrier"] == current_run["carrier"]}) if runs else []
+        if not runs or missing_carriers:
             status = "missing"
         elif age > thresholds.LOSS_RUN_MAX_AGE_DAYS:
             status = "stale"
-        elif d(earliest) > required_start(priors, as_of, years):
+        elif d(earliest) > start_needed:
             status = "short_history"
         else:
             status = "current"
         per_line[line] = {"status": status, "valued_as_of": newest, "valuation_age_days": age,
-                          "years_required": years, "covers_from": earliest}
+                          "years_required": years, "covers_from": earliest, "missing_carriers": missing_carriers}
         if status != "current":
-            carriers = sorted({p["carrier"] for p in priors} | {r["carrier"] for r in runs})
+            carriers = (missing_carriers + stale_carriers) if status in ("missing", "stale") and runs else \
+                sorted({p["carrier"] for p in priors} | run_carriers)
+            carriers = sorted(set(carriers)) or sorted({p["carrier"] for p in priors} | run_carriers)
             for carrier in carriers:
                 nums = ", ".join(p["policy_number"] for p in priors if p["carrier"] == carrier) or "all policies"
                 body = (f"Please provide currently valued loss runs for {a['insured_name']}, {line} coverage, "
@@ -92,17 +112,22 @@ def run(ctx: Ctx) -> dict:
         msgs.append(message("CSR2", "CSR5", "REQUEST", tid, "signed LOA needed",
                             f"Carriers need the insured's signed letter of authorization to release {len(drafts)} loss run(s)."))
 
-    premiums = {}
+    premiums, windowed = {}, []
     for line in lines:
         priors = [p for p in a.get("prior_policies") or [] if p["line"] == line]
-        premiums[line] = _premiums_in_window(a, line, required_start(priors, as_of, years), as_of)
-    summary_by_line = scoring.loss_summary([r for r in a.get("loss_runs") or [] if r["line"] in lines], premiums)
+        start = required_start(priors, as_of, years)
+        premiums[line] = _premiums_in_window(a, line, start, as_of)
+        # losses and premium over the same window: a 2017 claim does not belong in a five-term loss ratio
+        for r in a.get("loss_runs") or []:
+            if r["line"] == line:
+                windowed.append(dict(r, claims=[c for c in r["claims"] if d(c["date_of_loss"]) >= start]))
+    summary_by_line = scoring.loss_summary(windowed, premiums)
     large = [dict(l, line=line) for line, s in summary_by_line.items() for l in s["large_losses"]]
     if large:
         msgs.append(message("CSR2", "CSR4", "NOTIFY", tid, "large loss on file",
                             f"{len(large)} loss(es) at or above {money(thresholds.LARGE_LOSS_USD)}: markets need the narrative."))
 
-    pending = [l for l, v in per_line.items() if v["status"] in ("stale", "missing", "short_history")]
+    pending = [l for l, v in per_line.items() if v["status"] in ("stale", "missing", "short_history", "prior_unknown")]
     parts = [f"{l} {v['status']}" for l, v in per_line.items()]
     summary = "Loss runs: " + "; ".join(parts) + (f"; {len(drafts)} request(s) drafted." if drafts else ".")
     return result("CSR2", "loss_runs", "needs_data" if pending else "done", summary,

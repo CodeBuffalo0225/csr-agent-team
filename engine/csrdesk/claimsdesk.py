@@ -15,6 +15,7 @@ from __future__ import annotations
 from . import scoring, thresholds
 from .desk import Ctx, active_policy, draft, message, money, result
 
+CLAIMS_MADE_LINES = ("PROFESSIONAL", "CYBER", "EPLI")
 FNOL_FORM = {"PROPERTY": "ACORD 1 Property Loss Notice", "BOP": "ACORD 1 Property Loss Notice",
              "INLAND_MARINE": "ACORD 1 Property Loss Notice", "AUTO": "ACORD 2 Automobile Loss Notice",
              "GL": "ACORD 3 Liability Notice of Occurrence / Claim", "LIQUOR": "ACORD 3 Liability Notice of Occurrence / Claim",
@@ -23,8 +24,17 @@ FNOL_FORM = {"PROPERTY": "ACORD 1 Property Loss Notice", "BOP": "ACORD 1 Propert
 
 def run(ctx: Ctx) -> dict:
     a, r, tid = ctx.account, ctx.request, ctx.ticket["ticket_id"]
-    pol = active_policy(a, r["line"], r["date_of_loss"])
     lag = scoring.age_days(r["date_of_loss"], ctx.as_of)
+    if lag < 0:
+        return result("CSR7", "fnol", "escalate", f"Claim: date of loss {r['date_of_loss']} is after today.",
+                      findings={"policy_number": None, "urgency": "BAD_DATE", "report_lag_days": lag},
+                      escalate="date of loss is in the future: confirm the date before anything is drafted")
+    # Claims-made coverage (professional, cyber, EPLI, or a claims-made GL form) responds to the policy in force
+    # when the claim is reported, subject to its retro date; occurrence coverage to the policy on the date of loss.
+    reported = active_policy(a, r["line"], ctx.as_of)
+    reported_forms = " ".join((((reported or {}).get("dec_page") or {}).get("forms") or [])).lower()
+    claims_made = r["line"] in CLAIMS_MADE_LINES or "cg 00 02" in reported_forms or "claims-made" in reported_forms
+    pol = reported if claims_made else active_policy(a, r["line"], r["date_of_loss"])
     notify = [message("CSR7", "CSR6", "NOTIFY", tid, "new claim on account", f"{r['line']} loss {r['date_of_loss']}: renewal pricing affected."),
               message("CSR7", "CSR2", "NOTIFY", tid, "loss runs will change", f"Re-order {r['line']} loss runs after the carrier sets a reserve."),
               message("CSR7", "CSR8", "NOTIFY", tid, "claim to record", f"{r['line']} loss {r['date_of_loss']} reported {ctx.as_of}.")]
@@ -33,6 +43,7 @@ def run(ctx: Ctx) -> dict:
                       findings={"policy_number": None, "urgency": "COVERAGE_QUESTION", "report_lag_days": lag},
                       messages=notify, escalate=f"loss on {r['date_of_loss']} has no {r['line']} policy in force: AE handles, client is not told 'not covered'")
     est = r.get("estimated_amount")
+    estimate_known = est is not None
     urgent = r["injury"] or (est is not None and est >= thresholds.CLAIM_URGENT_USD)
     late = lag > thresholds.LATE_NOTICE_DAYS
     urgency = "URGENT" if urgent else ("LATE_NOTICE" if late else "ROUTINE")
@@ -46,9 +57,12 @@ def run(ctx: Ctx) -> dict:
         allowed.append(money(est))
     return result("CSR7", "fnol", "escalate" if urgent else "done",
                   f"Claim: {urgency} {r['line']} FNOL drafted on {pol['policy_number']}"
-                  + (f"; reported {lag} days after loss" if late else "") + ".",
+                  + (f"; reported {lag} days after loss" if late else "")
+                  + ("; estimate unknown" if not estimate_known else "")
+                  + ("; claims-made: policy by report date, check the retro date" if claims_made else "") + ".",
                   findings={"policy_number": pol["policy_number"], "carrier": pol["carrier"], "urgency": urgency,
-                            "report_lag_days": lag, "late_notice": late, "form": form},
+                            "report_lag_days": lag, "late_notice": late, "form": form, "estimate_known": estimate_known,
+                            "claims_made": claims_made},
                   messages=notify,
                   drafts=[draft("fnol", f"{pol['carrier']} claims", f"FNOL - {a['insured_name']} - {r['date_of_loss']}",
                                 body, "file_claim", allowed)],

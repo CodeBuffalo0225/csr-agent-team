@@ -62,7 +62,8 @@ class LossRuns(unittest.TestCase):
                      "renewal_rate_change_pct": None, "nonrenewal_notice": False, "dec_page": None} for y in range(2021, 2025)]
             t["account"]["prior_policies"] += hist
         r, _ = run(lossruns.run, edit(ticket("quote.json"), f))
-        self.assertEqual(r["findings"]["loss_summary"]["AUTO"]["loss_ratio"], round(31200 / (4 * 20000 + 21600), 3))
+        earned = 4 * 20000 + 21600 * 326 / 365            # current term 2025-11-20 -> as of 2026-10-12: 326 of 365 days earned
+        self.assertEqual(r["findings"]["loss_summary"]["AUTO"]["loss_ratio"], round(31200 / earned, 3))
 
     def test_new_venture_orders_nothing(self):
         def f(t):
@@ -116,6 +117,10 @@ class DecPagesAndExclusions(unittest.TestCase):
                                                    "renewal_rate_change_pct": None, "nonrenewal_notice": False,
                                                    "dec_page": {"limits": {"each_occurrence": 2000000}}})
         r, _ = run(decpages.run, edit(ticket("coi_wos.json"), f))
+        short = next(g for g in r["findings"]["gaps"] if g["kind"] == "limit_shortfall")
+        self.assertEqual(short["severity"], "HIGH")                 # umbrella exists but is not on the certificate
+        both = edit(ticket("coi_wos.json"), lambda t: (f(t), t["request"]["lines"].append("UMBRELLA")))
+        r, _ = run(decpages.run, both)
         short = next(g for g in r["findings"]["gaps"] if g["kind"] == "limit_shortfall")
         self.assertEqual(short["severity"], "MEDIUM")
 
