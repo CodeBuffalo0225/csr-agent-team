@@ -15,8 +15,8 @@ os.environ.setdefault("CSR_DESK_PEPPER", "test-pepper-not-a-secret")   # tests n
 from csrdesk import pii, policy, schemas, thresholds  # noqa: E402
 from csrdesk.desk import Ctx  # noqa: E402
 
-AS_OF = "2026-10-12"
-NOW = schemas.parse_timestamp("2026-10-12T13:30:00Z")
+AS_OF = "2026-10-13"
+NOW = schemas.parse_timestamp("2026-10-13T13:30:00Z")
 
 # Shapes copied from real vPIC / Census responses (2026-10-12), trimmed to the fields the engine reads.
 VPIC = {

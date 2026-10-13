@@ -15,8 +15,10 @@ stop-limiter said no · 2 bad input.
     bin/csr conformance                                           spine-spec vectors against production gates
     bin/csr demo                                                  every example ticket end to end (isolated runtime)
     bin/csr appetite [file]                                       validate the agency appetite file (default data/appetite.csv)
-    bin/csr rules [file]                                          validate the state notice rules (default data/state_rules.csv)
-    bin/csr ams status | ams export <dir>                         AMS connector state; CSR 8 store -> neutral import files
+    bin/csr rules [file]                                          validate notice + surplus lines rules; count unconfirmed rows
+    bin/csr setup validate|research                               deployment: check markets.csv; research tasks per appointed market
+    bin/csr setup propose <rows.csv> | confirm <market> --by <n>  proposed appetite rows; a person confirms one market's rows
+    bin/csr ams status|preview <id> [--system s]|push <id>|export <dir>   Applied Epic (primary), HawkSoft, EZLynx
     bin/csr replay <dir> [--live]                                 closed tickets vs what the CSRs did: agreement report
 """
 from __future__ import annotations
@@ -27,7 +29,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import ams, audit, conformance, grounding, market, orchestrator, packet, policy, publicdata, renewals, replay, schemas, staterules, store
+from . import ams, audit, conformance, grounding, market, markets, orchestrator, packet, policy, publicdata, renewals, replay, schemas, staterules, store
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -148,14 +150,59 @@ def cmd_rules(a):
     rows = staterules.load(a.file)
     errors = staterules.validate(rows, _today(None))
     status = "needs_data" if not rows else ("ok" if not errors else "invalid")
-    print(json.dumps({"status": status, "rows": len(rows), "errors": errors}, indent=2))
+    surplus = staterules.load(None, staterules.SURPLUS_DEFAULT)
+    unconfirmed = sorted({f"{r['state']}" for r in rows + surplus if not (r.get("confirmed_by") or "").strip()})
+    print(json.dumps({"status": status, "rows": len(rows), "surplus_rows": len(surplus), "errors": errors,
+                      "unconfirmed_states": unconfirmed,
+                      "confirm": "compliance sets confirmed_by on each row after checking it against its source_url" if unconfirmed else None},
+                     indent=2))
     return 0 if status == "ok" else 1
+
+
+def cmd_setup(a):
+    rows = markets.load_markets(a.markets)
+    if a.action in ("validate", "research"):
+        if rows is None:
+            print(json.dumps({"status": "needs_data", "fix": "copy data/agency/markets.example.csv to data/agency/markets.csv and list "
+                                                            "your appointed carriers and wholesalers/MGAs"}, indent=2))
+            return 1
+        errors = markets.validate_markets(rows)
+        if a.action == "validate" or errors:
+            print(json.dumps({"status": "ok" if not errors else "invalid", "markets": len(rows),
+                              "appointed": len(markets.appointed(rows)), "errors": errors}, indent=2))
+            return 0 if not errors else 1
+        print(json.dumps(markets.research_tasks(rows), indent=2))
+        return 0
+    if a.action == "propose":
+        if rows is None or not a.arg:
+            raise ValueError("setup propose needs data/agency/markets.csv and a CSV of proposed rows")
+        with open(a.arg, newline="", encoding="utf-8") as f:
+            import csv as _csv
+            r = markets.propose(list(_csv.DictReader(f)), rows, _today(None))
+        print(json.dumps(r, indent=2))
+        return 0 if not r["rejected"] else 1
+    if a.action == "confirm":
+        if not a.arg:
+            raise ValueError("setup confirm needs a market name")
+        print(json.dumps(markets.confirm(a.arg, a.by), indent=2))
+        return 0
+    raise ValueError(a.action)
 
 
 def cmd_ams(a):
     if a.action == "status":
         print(json.dumps(ams.connector_status(), indent=2))
         return 0
+    if a.action in ("preview", "push"):
+        if not a.out:
+            raise ValueError(f"ams {a.action} needs a ticket id")
+        run = orchestrator.load(a.out)
+        if a.action == "preview":
+            print(json.dumps(ams.preview(run, a.system), indent=2, ensure_ascii=False))
+            return 0
+        r = ams.push(run, live=orchestrator.agency_live())
+        print(json.dumps(r, indent=2))
+        return 0 if r["status"] == "pushed" else 1
     if not a.out:
         raise ValueError("ams export needs an output directory")
     s = store.Store()
@@ -205,7 +252,10 @@ def main(argv=None) -> int:
     s = sub.add_parser("demo"); s.add_argument("--out"); s.set_defaults(fn=cmd_demo)
     s = sub.add_parser("appetite"); s.add_argument("file", nargs="?", default="data/appetite.csv"); s.set_defaults(fn=cmd_appetite)
     s = sub.add_parser("rules"); s.add_argument("file", nargs="?", default=None); s.set_defaults(fn=cmd_rules)
-    s = sub.add_parser("ams"); s.add_argument("action", choices=["status", "export"]); s.add_argument("out", nargs="?"); s.set_defaults(fn=cmd_ams)
+    s = sub.add_parser("ams"); s.add_argument("action", choices=["status", "preview", "push", "export"]); s.add_argument("out", nargs="?")
+    s.add_argument("--system", default="applied_epic", choices=sorted(ams.SYSTEMS)); s.set_defaults(fn=cmd_ams)
+    s = sub.add_parser("setup"); s.add_argument("action", choices=["validate", "research", "propose", "confirm"]); s.add_argument("arg", nargs="?")
+    s.add_argument("--by", help="the person at the agency confirming"); s.add_argument("--markets", help="markets.csv path"); s.set_defaults(fn=cmd_setup)
     s = sub.add_parser("replay"); s.add_argument("dir"); s.add_argument("--live", action="store_true"); s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_replay)
     args = p.parse_args(argv)

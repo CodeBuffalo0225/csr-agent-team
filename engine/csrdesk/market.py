@@ -20,7 +20,7 @@ import csv
 import json
 from pathlib import Path
 
-from . import renewals, schemas, scoring, thresholds
+from . import markets, renewals, schemas, scoring, staterules, thresholds
 from .desk import Ctx, message, result, ticket_lines
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +42,9 @@ def _best_ok(rating: str) -> bool:
     return r in order and order.index(r) <= order.index(thresholds.AM_BEST_FLOOR)
 
 
-def filter_markets(rows: list, line: str, state: str, naics: str, revenue, as_of: str) -> tuple:
+def filter_markets(rows: list, line: str, state: str, naics: str, revenue, as_of: str, appointed: dict = None) -> tuple:
+    """`appointed` is markets.appointed(markets.csv) when the agency has loaded its market list: a row for a
+    market the agency is not appointed with is dropped, and admitted status comes from that list."""
     kept, dropped = [], []
     for row in rows:
         why = None
@@ -51,7 +53,12 @@ def filter_markets(rows: list, line: str, state: str, naics: str, revenue, as_of
         banded = bool((row.get("min_revenue") or "").strip() or (row.get("max_revenue") or "").strip())
         if row["line"].strip() != line:
             continue
-        if "*" not in states and state not in states:
+        mkt = (appointed or {}).get(row["carrier"].strip())
+        if not (row.get("confirmed_by") or "").strip():
+            why = "appetite row not confirmed by the agency (bin/csr setup confirm)"
+        elif appointed is not None and mkt is None:
+            why = "agency is not appointed with this market"
+        elif "*" not in states and state not in states:
             why = f"not writing in {state}"
         elif not prefixes or ("*" not in prefixes and not any(naics.startswith(p) for p in prefixes)):
             why = f"NAICS {naics} outside appetite"
@@ -77,8 +84,9 @@ def filter_markets(rows: list, line: str, state: str, naics: str, revenue, as_of
             dropped.append({"carrier": row["carrier"], "line": line, "why": why})
         else:
             kept.append({"carrier": row["carrier"], "line": line, "am_best": row["am_best"],
-                         "evidence": ev,
-                         "notes": row.get("notes") or ""})
+                         "evidence": ev, "notes": row.get("notes") or "",
+                         "admitted": None if mkt is None else mkt["admitted"].strip().upper() == "Y",
+                         "kind": None if mkt is None else mkt["kind"].strip()})
     return kept, dropped
 
 
@@ -99,10 +107,19 @@ def run(ctx: Ctx) -> dict:
                       findings={"status": "needs_data", "value": None, "lines": lines, "remarket_reasons": why})
     state = (a.get("mailing_address") or {}).get("state")
     judgments = {(j["carrier"]): j for j in ctx.config.get("judgments", [])}
-    by_line, all_dropped, needs_judgment = {}, [], False
+    mlist = markets.load_markets(ctx.config.get("markets"))
+    appt = markets.appointed(mlist) if mlist is not None else None
+    by_line, all_dropped, needs_judgment, wholesale = {}, [], False, {}
     for line in lines:
-        kept, dropped = filter_markets(rows, line, state, a["naics"], a.get("annual_revenue"), ctx.as_of)
+        kept, dropped = filter_markets(rows, line, state, a["naics"], a.get("annual_revenue"), ctx.as_of, appt)
         all_dropped += dropped
+        # admitted first: the wholesale / surplus lines path opens only when no admitted market is eligible
+        admitted_kept = [k for k in kept if k["admitted"] is not False and k["kind"] != "wholesaler"]
+        if appt is not None and not admitted_kept:
+            wholesale[line] = {"wholesalers": sorted(n for n, r in appt.items()
+                                                     if r["kind"].strip() in ("wholesaler", "mga") and markets.writes(r, line, state)),
+                               "diligent_effort": staterules.surplus_rule(state, ctx.as_of)}
+        kept = admitted_kept if admitted_kept else kept
         scored = []
         for k in kept:
             j = judgments.get(k["carrier"])
@@ -114,18 +131,27 @@ def run(ctx: Ctx) -> dict:
         admitted = scoring.admit(scored, thresholds.MARKET_FLOOR, thresholds.MARKET_CAP)
         by_line[line] = {"eligible": [k["carrier"] for k in kept], "ranked": admitted,
                          "below_floor_or_capped": [s["id"] for s in scored if s not in admitted]}
+    if wholesale:
+        for line, w in wholesale.items():
+            de = w["diligent_effort"]
+            req = (f"{de['value']['declinations_required']} declinations from authorized insurers first"
+                   + (" (rule not yet confirmed by compliance)" if de["status"] == "unconfirmed" else "")) if de["value"] else de["why"]
+            w["note"] = f"no admitted market eligible for {line}: wholesale path via {', '.join(w['wholesalers']) or 'no appointed wholesaler'}; {req}"
     msgs = [message("CSR4", "AE", "NOTIFY", tid, "market list ready" if not needs_judgment else "eligible markets filtered",
                     "; ".join(f"{l}: {len(v['ranked']) or len(v['eligible'])} market(s)" for l, v in by_line.items()))]
     summary = lead + "Market: " + "; ".join(f"{l} {len(v['eligible'])} eligible" + (f", {len(v['ranked'])} ranked" if v["ranked"] else "")
-                                     for l, v in by_line.items()) + f"; {len(all_dropped)} dropped by rule."
+                                     for l, v in by_line.items()) + f"; {len(all_dropped)} dropped by rule." \
+        + "".join(f" {w['note']}." for w in wholesale.values()) \
+        + ("" if mlist is not None else " Market list (data/agency/markets.csv) not loaded: appointment and admitted status unchecked.")
     return result("CSR4", "market", "needs_data" if needs_judgment else "done", summary,
                   findings={"status": "needs_judgment" if needs_judgment else "ranked", "by_line": by_line, "remarket_reasons": why,
-                            "dropped": all_dropped, "floor": thresholds.MARKET_FLOOR, "cap": thresholds.MARKET_CAP},
+                            "dropped": all_dropped, "floor": thresholds.MARKET_FLOOR, "cap": thresholds.MARKET_CAP,
+                            "wholesale": wholesale, "market_list_loaded": mlist is not None},
                   messages=msgs)
 
 
 APPETITE_COLUMNS = ("carrier", "line", "states", "naics_prefixes", "min_revenue", "max_revenue", "am_best",
-                    "appetite_url", "observed", "notes")
+                    "appetite_url", "observed", "confirmed_by", "notes")
 
 
 def validate_appetite(path, as_of: str) -> dict:
@@ -159,6 +185,8 @@ def validate_appetite(path, as_of: str) -> dict:
                 errors.append(f"{where}: {k} is not a number")
         if (r.get("am_best") or "").strip() not in thresholds.AM_BEST_ORDER:
             errors.append(f"{where}: AM Best rating {r.get('am_best')!r} not recognised")
+        if not (r.get("confirmed_by") or "").strip():
+            errors.append(f"{where}: confirmed_by blank — only rows a person at the agency confirmed are used")
         try:
             schemas.check_evidence({"status": "VERIFIED" if (r.get("appetite_url") or "").strip() else "INFERENCE",
                                     "url": (r.get("appetite_url") or "").strip() or None,

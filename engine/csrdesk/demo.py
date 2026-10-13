@@ -2,7 +2,7 @@
 
 Real network calls: NHTSA vPIC (VINs) and the Census geocoder (addresses). Everything else is the
 sample account in data/examples — a fictional insured with fictional carriers, marked SAMPLE.
-Fixed clock so the run is reproducible: as of 2026-10-12, tickets received 13:00Z, now 13:30Z.
+Fixed clock so the run is reproducible: as of 2026-10-13, tickets received 13:00Z, now 13:30Z.
 """
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from . import audit, orchestrator, packet, renewals, schemas
 
 ROOT = Path(__file__).resolve().parents[2]
 EX = ROOT / "data" / "examples"
-AS_OF = "2026-10-12"
-NOW = "2026-10-12T13:30:00Z"
+AS_OF = "2026-10-13"
+NOW = "2026-10-13T13:30:00Z"
 
 
 def _ticket(name):

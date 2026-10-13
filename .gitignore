@@ -3,4 +3,6 @@ __pycache__/
 *.pyc
 .DS_Store
 data/appetite.csv
-data/state_rules.csv
+data/agency/markets.csv
+data/agency/ams.json
+data/agency/appetite.proposed.csv

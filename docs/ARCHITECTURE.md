@@ -224,13 +224,15 @@ honest state until it's loaded.
 
 | Data | Load into | Check with | Until it's loaded |
 |---|---|---|---|
-| Carrier appetite guide | `data/appetite.csv` (template `data/appetite.example.csv`) | `bin/csr appetite` | CSR 4 is `needs_key`: no carriers from memory |
-| State cancellation / non-renewal notice periods | `data/state_rules.csv` (template `data/state_rules.example.csv`), each row with its statute/bulletin URL and verified date | `bin/csr rules` | every renewal packet shows "Data gap: no verified NJ notice rule" |
-| AMS | an MCP connector for the agency's AMS | `bin/csr ams status` | `needs_key`; `bin/csr ams export <dir>` writes masked import files |
+| Markets: appointed carriers + wholesalers/MGAs | `data/agency/markets.csv` (template alongside) | `bin/csr setup validate` | appointment and admitted status unchecked, noted in every market step |
+| Carrier appetite | researched per market (`setup research` → `propose`), confirmed by a person (`setup confirm`) into `data/appetite.csv` | `bin/csr appetite` | CSR 4 is `needs_key`: no carriers from memory |
+| State notice periods + surplus-lines diligent effort | `data/state_rules.csv`, `data/surplus_lines_rules.csv`: **NJ and NY researched and cited 2026-10-13**, awaiting compliance's `confirmed_by` | `bin/csr rules` | other states: "Data gap"; NJ/NY: "Confirm: compliance has not confirmed it" |
+| AMS: Applied Epic (primary), HawkSoft, EZLynx | `data/agency/ams.json` + token env var, after the vendor grants API access | `bin/csr ams status`, `ams preview` | `needs_key`; `bin/csr ams export <dir>` writes masked import files |
 | Closed tickets for evaluation | `data/runtime/replay/` (gitignored: real tickets hold PII), format in `replay.py` | `bin/csr replay data/runtime/replay` | only the six SAMPLE replay cases exist |
 
-All four files are gitignored when filled. A state-rule value nobody verified would be a legal claim the engine
-made up, so rows without a source URL and verified date are rejected, and rows older than a year are flagged stale.
+Agency-specific files are gitignored. A state-rule value nobody verified would be a legal claim the engine made
+up, so rows without a source URL and verified date are rejected, rows older than a year are flagged stale, and
+researched rows stay "unconfirmed" until compliance signs them. Step-by-step with sources: `docs/DEPLOYMENT.md`.
 
 ## 9. Production readiness
 
@@ -247,8 +249,8 @@ PRODUCTION READINESS — agency CSR desk
 9. Cost/Token Bounds ....... ✅  hop, visit, ping-pong, message, budget, revision and wall-clock caps
 
 VERDICT: NEEDS WORK, for production. It's ready to run as a drafts-only desk on real tickets.
-What remains is the agency's, not code: load the appetite guide and verified state rules, pick the AMS,
-and replay 20 closed tickets (`bin/csr replay`) before trusting it unsupervised.
+What remains is the agency's, not code: list its markets and confirm their researched appetite, have compliance
+confirm the NJ/NY rules, obtain Applied Epic (or HawkSoft / EZLynx) API access, and replay 20 closed tickets.
 ```
 
 ## 10. Independent review (2026-10-13)

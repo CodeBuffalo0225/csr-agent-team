@@ -23,7 +23,8 @@ bin/csr release <id> <draft#>                  # may a human release this draft?
 bin/csr renewals <accounts.json>               # CSR 6 book sweep
 bin/csr gate judgment|message|decision|ticket|draft <file>
 bin/csr appetite | bin/csr rules               # validate the agency's appetite file / state notice rules
-bin/csr ams status | bin/csr ams export <dir>  # AMS connector state; masked import files from CSR 8
+bin/csr setup validate|research|propose|confirm # deployment: markets -> researched appetite -> human confirm
+bin/csr ams status|preview|push|export         # Applied Epic (primary), HawkSoft, EZLynx; push needs live + config
 bin/csr replay <dir>                           # closed tickets vs what the CSRs did
 ```
 Exit codes are the enforcement: 0 ok · 1 a gate or the limiter said no · 2 bad input.
@@ -43,7 +44,8 @@ Exit codes are the enforcement: 0 ok · 1 a gate or the limiter said no · 2 bad
 7. **The stop-limiter is not bypassed.** A halt goes to a human with the packet.
 8. **Spine conformance.** `conformance/spine-v1.json` is vendored from CodeBuffalo0225/spine-spec and pinned
    in `conformance/PIN`. Never edit it. A failing vector is fixed in production code, never in the adapter.
-9. **No unverified law.** State notice periods come only from `data/state_rules.csv` rows with a source URL and
-   a verified date. The engine never supplies one and never interprets what a missed window means.
+9. **No unverified law.** State notice and surplus-lines rules come only from rows with a source URL and a verified
+   date; researched rows stay "unconfirmed" until compliance fills `confirmed_by`. No agent fills `confirmed_by`,
+   in those files or in `data/appetite.csv`. The engine never interprets what a missed window means.
 10. **Sample data is fictional** (insured and carriers marked SAMPLE / fictional). Never put a real client's
    data in `data/examples/`.

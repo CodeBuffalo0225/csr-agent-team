@@ -39,7 +39,9 @@ def build(run: dict, as_of: str) -> dict:
         actions.append(f"Outstanding: {o}")
     for step, r in run["steps"].items():
         rule = (r.get("findings") or {}).get("state_notice_rule")
-        if rule and rule["status"] != "ok":
+        if rule and rule["status"] == "unconfirmed":
+            actions.append(f"Confirm ({step}): {rule['why']}")
+        elif rule and rule["status"] != "ok":
             actions.append(f"Data gap ({step}): {rule['why']}")
     for b in blocked:
         actions.append(f"Blocked: {b}")

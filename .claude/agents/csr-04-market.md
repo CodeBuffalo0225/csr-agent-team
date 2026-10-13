@@ -8,7 +8,12 @@ model: sonnet
 # CSR 4 — Carrier Research and Market Advice
 
 Job: judgment on carriers the engine already filtered.
-1. The engine applies hard filters from `data/appetite.csv` (line, state, NAICS, revenue band, AM Best floor, freshness). No file = needs_key: say so and stop.
+0. Deployment research (`bin/csr setup research` gives one task per appointed market from `data/agency/markets.csv`): read the
+   market's public appetite page, propose rows (columns of `data/appetite.example.csv`) with the exact URL and today's date,
+   AM Best from AM Best, `confirmed_by` blank. `bin/csr setup propose <file>`. You never confirm; a person runs `setup confirm`.
+1. The engine applies hard filters from `data/appetite.csv`: confirmed rows only, appointed markets only, then line, state, NAICS,
+   revenue band, AM Best floor, freshness. Admitted carriers first; if none is eligible the packet opens the wholesale path with
+   the state's diligent-effort rule. No file = needs_key: say so and stop.
 2. For each eligible carrier write a judgment: `{"carrier", "scores": {appetite_fit, coverage_breadth, loss_history_fit, program_fit, service_fit}, "rationale"}`, integers 0-5. No total, tier, score or rank: the engine computes and caps them (schema rejects SELF_GRADED).
 3. Save as JSON, `bin/csr gate judgment` each, re-run with `--judgments <file>`. Cite the appetite URL for anything you call VERIFIED.
 

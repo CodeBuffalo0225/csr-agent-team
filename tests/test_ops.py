@@ -93,7 +93,7 @@ class Appetite(unittest.TestCase):
             w = csv.DictWriter(fh, market.APPETITE_COLUMNS)
             w.writeheader()
             w.writerow({"carrier": "Good", "line": "GL", "states": "NJ|NY", "naics_prefixes": "5617", "am_best": "A",
-                        "appetite_url": "https://example.com/g", "observed": "2026-06-01"})
+                        "appetite_url": "https://example.com/g", "observed": "2026-06-01", "confirmed_by": "Test Confirmer"})
             w.writerow({"carrier": "Bad", "line": "GLX", "states": "Jersey", "naics_prefixes": "", "min_revenue": "lots",
                         "am_best": "AAA", "appetite_url": "", "observed": ""})
         r = market.validate_appetite(str(f), AS_OF)
@@ -107,9 +107,17 @@ class Appetite(unittest.TestCase):
 
 
 class AmsAndReplay(unittest.TestCase):
-    def test_connector_is_needs_key_until_a_call_completes(self):
-        self.assertEqual(ams.connector_status()["status"], "needs_key")
-        self.assertEqual(ams.connector_status([{"event": "call_ok", "vendor": "ams", "ts": "t"}])["status"], "connected")
+    def test_connector_is_needs_key_until_config_token_and_a_completed_call(self):
+        import os
+        from unittest import mock
+        cfgp = tmpdir() / "ams.json"
+        self.assertEqual(ams.connector_status(config_path=str(cfgp))["status"], "needs_key")
+        cfgp.write_text(json.dumps({"system": "hawksoft", "base_url": "https://x.example.invalid", "token_env": "T_HS",
+                                    "paths": {"note": "/n"}}))
+        with mock.patch.dict(os.environ, {"T_HS": "t"}):
+            self.assertEqual(ams.connector_status(config_path=str(cfgp))["status"], "needs_key")      # no completed call yet
+            done = [{"event": "call_ok", "vendor": "ams", "ts": "t"}]
+            self.assertEqual(ams.connector_status(done, config_path=str(cfgp))["status"], "connected")
 
     def test_export_is_masked(self):
         cfg = isolated_config()

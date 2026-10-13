@@ -44,7 +44,7 @@ class LossRuns(unittest.TestCase):
     def test_stale_and_current_counted_in_policy_terms(self):
         r, _ = run(lossruns.run, ticket("quote.json"))
         per = r["findings"]["per_line"]
-        self.assertEqual(per["GL"]["status"], "stale")            # valued 2026-06-30: 104 days > 90
+        self.assertEqual(per["GL"]["status"], "stale")            # valued 2026-06-30: 105 days > 90
         self.assertEqual(per["AUTO"]["status"], "current")        # five terms back to 2021-11-20
         self.assertEqual(per["UMBRELLA"]["status"], "new_line")
         self.assertEqual(len(r["drafts"]), 1)                     # only the stale GL carrier gets a request
@@ -62,7 +62,7 @@ class LossRuns(unittest.TestCase):
                      "renewal_rate_change_pct": None, "nonrenewal_notice": False, "dec_page": None} for y in range(2021, 2025)]
             t["account"]["prior_policies"] += hist
         r, _ = run(lossruns.run, edit(ticket("quote.json"), f))
-        earned = 4 * 20000 + 21600 * 326 / 365            # current term 2025-11-20 -> as of 2026-10-12: 326 of 365 days earned
+        earned = 4 * 20000 + 21600 * 327 / 365            # current term 2025-11-20 -> as of 2026-10-13: 327 of 365 days earned
         self.assertEqual(r["findings"]["loss_summary"]["AUTO"]["loss_ratio"], round(31200 / earned, 3))
 
     def test_new_venture_orders_nothing(self):
@@ -173,15 +173,15 @@ class Market(unittest.TestCase):
     def _appetite(self, rows):
         f = Path(tempfile.mkdtemp()) / "appetite.csv"
         with f.open("w", newline="") as fh:
-            w = csv.DictWriter(fh, ["carrier", "line", "states", "naics_prefixes", "min_revenue", "max_revenue", "am_best",
-                                    "appetite_url", "observed", "notes"])
+            w = csv.DictWriter(fh, list(market.APPETITE_COLUMNS))
             w.writeheader()
             w.writerows(rows)
         return str(f)
 
     def _row(self, carrier, **kw):
         base = {"carrier": carrier, "line": "GL", "states": "NJ|NY", "naics_prefixes": "5617", "min_revenue": "",
-                "max_revenue": "5000000", "am_best": "A", "appetite_url": "https://example.com/appetite", "observed": "2026-06-01", "notes": ""}
+                "max_revenue": "5000000", "am_best": "A", "appetite_url": "https://example.com/appetite", "observed": "2026-06-01",
+                "confirmed_by": "Test Confirmer", "notes": ""}
         return {**base, **kw}
 
     def _judge(self, carrier, n):
@@ -220,7 +220,7 @@ class Market(unittest.TestCase):
 class RenewalsAndClaims(unittest.TestCase):
     def test_45_day_notice_goes_to_csr5(self):
         r, _ = run(renewals.run, ticket("renewal.json"))
-        self.assertEqual(r["findings"]["days_to_expiration"], 39)
+        self.assertEqual(r["findings"]["days_to_expiration"], 38)
         self.assertTrue(any(m["to"] == "CSR5" for m in r["messages"]))
 
     def test_no_notice_at_60_days(self):

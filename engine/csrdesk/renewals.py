@@ -58,8 +58,14 @@ def run(ctx: Ctx) -> dict:
     rows = staterules.load(ctx.config.get("state_rules"))
     rule = staterules.rule_for(state, p["line"], ctx.as_of, rows) if state else {"status": "needs_data", "value": None,
                                                                                     "why": "no mailing state on the account"}
-    rule_txt = (f"{state} notice rules: {rule['why']}" if rule["status"] != "ok" else
-                f"{state} non-renewal notice {rule['value']['nonrenewal_notice_days']} days per agency rules (verified {rule['evidence']['observed']})")
+    if rule["status"] in ("ok", "unconfirmed"):
+        n = rule["value"]["nonrenewal_notice_days"]
+        rule_txt = (f"{state} non-renewal notice {n} days before expiration"
+                    + (" (researched, compliance has not confirmed)" if rule["status"] == "unconfirmed" else ""))
+        if n is not None and left < n and not p.get("nonrenewal_notice"):
+            rule_txt += f"; {left} days left and no non-renewal notice on file"
+    else:
+        rule_txt = f"{state} notice rules: {rule['why']}"
     return result("CSR6", "renewal", "escalate" if urgent else "done",
                   f"Renewal: {p['line']} {p['policy_number']} expires in {left} days; {len(due)} rung(s) due. {rule_txt}.",
                   findings={"policy_number": p["policy_number"], "line": p["line"], "days_to_expiration": left,

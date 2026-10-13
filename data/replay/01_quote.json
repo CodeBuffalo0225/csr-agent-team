@@ -1,7 +1,7 @@
 {
   "ticket_id": "Q-1001",
   "type": "QUOTE",
-  "received": "2026-10-12T13:00:00Z",
+  "received": "2026-10-13T13:00:00Z",
   "account": {
     "insured_name": "SAMPLE Meadowlands Lawn & Snow LLC",
     "dba": null,
@@ -196,8 +196,8 @@
       "primary_noncontributory": true
     }
   },
-  "as_of": "2026-10-12",
-  "now": "2026-10-12T13:30:00Z",
+  "as_of": "2026-10-13",
+  "now": "2026-10-13T13:30:00Z",
   "expected": {
     "steps_include": [
       "CSR1:intake",
